@@ -3,11 +3,27 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [0.1.1] - 2026-06-30
 
-> Note: as of 2026-06-30 there are **zero commits** in this repository. The entire implementation
-> below constitutes the first commit (pending user approval). The `[Unreleased]` section describes
-> all work done in the initial build session (M0–M16).
+### Fixed
+- **CI now goes green on hosted `ubuntu-latest`.** Added an apt-install step that fetches
+  `senzingsdk-runtime` from Senzing's public apt repo at build time (mirroring the official
+  `senzing/senzingsdk-runtime` Dockerfile) into `/opt/senzing`, so CI compiles and runs the full
+  78-test suite. Previously the `Verify Senzing SDK` step always failed — no licensed dist exists on
+  hosted runners. No self-hosted runner, no committed SDK, no redistribution; the FAT jar is still
+  never built or published in CI.
+- CI: pass `SENZING_ACCEPT_EULA` (and `DEBIAN_FRONTEND=noninteractive`) through `sudo` on the apt
+  install. The `senzingsdk-runtime` preinst reads that variable and otherwise drops to an interactive
+  EULA `read </dev/tty` that hangs the runner; `sudo` resets the environment by default, so the
+  job-level export never reached the preinst.
+- CI: add `sbt/setup-sbt` (SHA-pinned, v1.4.0) — sbt is not pre-installed on `ubuntu-latest`.
+- FAQ MCP server (`.claude/faq_server.py`): refresh the index synchronously before serving each
+  request instead of in a background thread afterward, so a query issued immediately after editing or
+  adding a FAQ no longer returns stale results.
+
+## [0.1.0] - 2026-06-30
+
+Initial Senzing-on-Spark reference implementation (M0–M16).
 
 ### Added
 

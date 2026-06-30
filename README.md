@@ -8,7 +8,13 @@ error DataFrame), and processes **redo** as a scheduled, parallel job. Concurren
 entirely by Spark executor/worker count — there is no "threads per worker" knob; each task drives a
 shared per-executor-JVM engine single-threaded.
 
-- Design: [`docs/DESIGN.md`](docs/DESIGN.md)
+- Architecture (how Senzing runs on Spark): [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- Building the FAT jar: [`docs/BUILD.md`](docs/BUILD.md)
+- Examples (runnable `spark-submit`): [`docs/EXAMPLES.md`](docs/EXAMPLES.md)
+- Performance & sizing (scaling to billions of records): [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)
+- Troubleshooting (Spark-specific failure modes): [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
+- Databricks deployment: [`docs/DATABRICKS.md`](docs/DATABRICKS.md)
+- Design (implementation): [`docs/DESIGN.md`](docs/DESIGN.md)
 - Build plan (milestones + test gates): [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)
 - Ops runbook: [`docs/RUNBOOK.md`](docs/RUNBOOK.md)
 - Deployment tutorials (⚠️ **DRAFT — untested**): [on-prem Spark](docs/tutorials/spark-onprem.md) ·

@@ -153,11 +153,11 @@ an **unmanaged local dependency** (`unmanagedJars += <SENZING_DIR>/er/sdk/java/s
    no-redistribution.
 7. `patchelf --set-rpath '$ORIGIN'` (**without** `--force-rpath`) **only on bundled siblings that lack
    a RUNPATH** (e.g. `libgcc_s`, any bundled `libssl`/`libcrypto`). **Do NOT patchelf `libSz.so`** (it
-   is ~450 MB and already RUNPATH=`$ORIGIN`; `--force-rpath` would downgrade it to legacy `DT_RPATH`,
+   is ~430 MB and already RUNPATH=`$ORIGIN`; `--force-rpath` would downgrade it to legacy `DT_RPATH`,
    change precedence, and does not fix dlopen-by-soname). patchelf alone is insufficient — pair with
    step 4.
 
-Assembly: `sbt -J-Xmx4g assembly` (the ~464 MB payload → a **~265 MB** jar, dominated by the
+Assembly: `sbt -J-Xmx8g assembly` (`-J-Xmx4g` minimum; the ~464 MB payload → a **~265 MB** jar, dominated by the
 already-stripped ~430 MB `libSz.so`; `stageNatives` also runs `strip` as a no-op safety net). Merge
 strategy keeps `native/**` verbatim, discards META-INF signatures, concats services, last-wins
 `reference.conf`. A post-assembly **verify** task asserts the jar contains exactly the

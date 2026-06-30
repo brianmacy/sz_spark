@@ -20,7 +20,7 @@ Deploys the sz_spark jobs to a standalone or YARN Spark cluster against a co-loc
 ```bash
 export SENZING_DIR=/opt/senzing
 sbt stageNatives          # stage libs/data/resources/config from the licensed dist (gitignored)
-sbt -J-Xmx4g assembly     # -> target/scala-2.13/sz-spark-assembly.jar  (~265 MB)
+sbt -J-Xmx8g assembly     # -> target/scala-2.13/sz-spark-assembly.jar  (~265 MB; -J-Xmx4g minimum)
 JAR_SHA=$(sha256sum target/scala-2.13/sz-spark-assembly.jar | cut -d' ' -f1)
 echo "$JAR_SHA"           # used below to set the launch LD_LIBRARY_PATH
 ```

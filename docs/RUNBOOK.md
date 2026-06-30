@@ -41,7 +41,7 @@ moderate cores over a few fat executors if per-node native RAM is tight. See
 ## FAT jar size
 
 ~**265 MB** (≈464 MB staged payload, dominated by the already-stripped ~430 MB `libSz.so`) — not
-multi-GB. Build with `-J-Xmx4g`.
+multi-GB. Build with `-J-Xmx8g` (`-J-Xmx4g` minimum).
 
 ## One-time init (before any Spark job)
 

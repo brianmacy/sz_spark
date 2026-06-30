@@ -3,6 +3,25 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.1.2] - 2026-06-30
+
+### Added
+- Reader-facing, search-indexable docs under `docs/` (the crawler indexes README + everything under
+  `docs/`): `ARCHITECTURE.md` (how Senzing runs on Spark), `BUILD.md` (FAT-jar packaging),
+  `EXAMPLES.md` (runnable `spark-submit` for each job), `PERFORMANCE.md` (sizing + standard Senzing
+  performance model — DB co-location, PostgreSQL tuning, connection planning; no fabricated numbers,
+  benchmarks-pending), `TROUBLESHOOTING.md` (Spark-specific native-load / memory / DB failure modes).
+- Deepened `DATABRICKS.md`: Volumes/DBFS jar location, cluster libraries, init scripts, secrets/Unity
+  Catalog, notebook-vs-JAR, autoscaling caveats (marked not-yet-validated on a live cluster).
+- README links the new docs.
+
+### Fixed
+- Cross-document consistency: reconciled the assembly heap flag to `-J-Xmx8g` (`-J-Xmx4g` minimum)
+  across BUILD/DESIGN/RUNBOOK/tutorial (was a 4g/8g split); corrected `libSz.so` size to ~430 MB in
+  DESIGN (was ~450 MB in one place); removed a duplicated Spark-conf block in DATABRICKS.
+- Doc accuracy (caught by review against source): `EXAMPLES.md` `InitJob` now shows the required
+  `db=<jdbcUrl>` argument — without it the schema DDL is silently skipped on Postgres/MySQL/MSSQL.
+
 ## [0.1.1] - 2026-06-30
 
 ### Fixed

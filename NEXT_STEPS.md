@@ -13,9 +13,11 @@
    Dependabot has no sbt support, so Scala/sbt deps are bumped manually (all at latest stable as of
    2026-06-30; sbt kept on the 1.x line since 2.0 is a breaking major).
 
-3. **Wire a licensed Senzing dist into CI** (or document clearly why CI will always fail the SDK check).
-   - The `ci.yml` `Verify Senzing SDK` step will fail on `ubuntu-latest` unless a self-hosted runner with `senzingsdk-runtime` installed is used, or a private fetch step is added.
-   - Options: self-hosted runner, private artifact fetch, or leave CI in "compile-only-with-stub" mode and document it prominently.
+3. **Wire a licensed Senzing dist into CI** — ✅ DONE. `ci.yml` now installs `senzingsdk-runtime`
+   at CI time from Senzing's public apt repo (`senzing-production-apt.s3.amazonaws.com`, mirroring
+   the official `senzing/senzingsdk-runtime` Dockerfile) into `/opt/senzing` on the hosted
+   `ubuntu-latest` runner. No self-hosted runner, no committed SDK, no redistribution. The
+   `Verify Senzing SDK` step still fails fast if the jar is absent after install.
 
 ## Short-term (next session)
 

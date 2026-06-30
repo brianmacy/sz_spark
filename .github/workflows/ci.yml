@@ -5,10 +5,10 @@ name: ci
 # engine + database) and never builds/publishes the FAT jar (no SDK redistribution).
 #
 # REQUIREMENT: the build compiles against the Senzing Java SDK jar, which is NOT on Maven
-# Central and cannot be redistributed. CI must make a licensed dist available and point
-# SENZING_DIR at it (e.g. a self-hosted runner with senzingsdk-runtime installed, or a
-# private fetch step using your own credentials — see docs/DATABRICKS.md / RUNBOOK.md).
-# Without it, the compile step fails fast by design.
+# Central. It is installed at CI time from Senzing's public apt repo (the "Install Senzing
+# SDK (apt)" step below, mirroring the official senzing/senzingsdk-runtime Dockerfile) into
+# $SENZING_DIR — it is never committed or redistributed. The compile step still fails fast
+# if the jar is missing rather than compile against a stub.
 
 on:
   push:
@@ -20,6 +20,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SENZING_DIR: /opt/senzing
+      # Accepting Senzing's EULA in Senzing's own CI to install the SDK non-interactively.
+      SENZING_ACCEPT_EULA: I_ACCEPT_THE_SENZING_EULA
+      # Pinned to the repo-registration package shipped by senzing/senzingsdk-runtime.
+      SENZING_APT_REPOSITORY_NAME: senzingrepo_2.0.1-1_all.deb
+      SENZING_APT_REPOSITORY_URL: https://senzing-production-apt.s3.amazonaws.com
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -37,12 +42,25 @@ jobs:
             ~/.cache/coursier
           key: sbt-${{ runner.os }}-${{ hashFiles('**/build.sbt', 'project/**') }}
 
-      # Provide a licensed Senzing dist at $SENZING_DIR before this point (org-specific;
-      # not committed). Fail loudly if the SDK jar is missing rather than compile against a stub.
+      # Install the Senzing SDK from Senzing's public apt repo at CI time (NOT committed —
+      # no redistribution). Mirrors the official senzing/senzingsdk-runtime Dockerfile recipe;
+      # installs to $SENZING_DIR (/opt/senzing). The FAT jar is still never built/published here.
+      - name: Install Senzing SDK (apt)
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get -y --no-install-recommends install ca-certificates wget
+          wget -O "/tmp/${SENZING_APT_REPOSITORY_NAME}" \
+            "${SENZING_APT_REPOSITORY_URL}/${SENZING_APT_REPOSITORY_NAME}"
+          sudo apt-get -y --no-install-recommends install "/tmp/${SENZING_APT_REPOSITORY_NAME}"
+          sudo apt-get update
+          sudo apt-get -y --no-install-recommends install libpq5 senzingsdk-runtime jq
+
+      # Fail loudly if the SDK jar is missing rather than compile against a stub.
       - name: Verify Senzing SDK is available
         run: |
           test -f "$SENZING_DIR/er/sdk/java/sz-sdk.jar" \
-            || { echo "::error::Senzing SDK jar not found at $SENZING_DIR/er/sdk/java/sz-sdk.jar. Provide a licensed dist."; exit 1; }
+            || { echo "::error::Senzing SDK jar not found at $SENZING_DIR/er/sdk/java/sz-sdk.jar after apt install."; exit 1; }
 
       - name: Format check + full Spark test suite (excludes SZ_IT integration)
         run: sbt -v scalafmtCheckAll test

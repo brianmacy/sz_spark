@@ -159,18 +159,18 @@ def _load_faqs() -> None:
 
 
 def _refresh_if_stale() -> None:
-    if not _reindex_lock.acquire(blocking=False):
-        return
-    try:
+    """Reload the index if FAQ files changed on disk.
+
+    Called synchronously at the START of every tool so a query issued right
+    after editing/adding a FAQ always reflects the current files. A previous
+    version reindexed in a background thread AFTER serving, which made the
+    first call after any change return stale results. Fingerprinting is a
+    cheap scandir + mtime check, so per-call cost is negligible and a reload
+    only happens when something actually changed.
+    """
+    with _reindex_lock:
         if _compute_fingerprint() != _fingerprint:
             _load_faqs()
-    finally:
-        _reindex_lock.release()
-
-
-def _schedule_refresh() -> None:
-    """Trigger a background reindex check after serving the response."""
-    threading.Thread(target=_refresh_if_stale, daemon=True).start()
 
 
 _load_faqs()
@@ -210,6 +210,7 @@ mcp = FastMCP(
 @mcp.tool()
 def get_faq_categories() -> str:
     """List all FAQ categories with the number of articles in each."""
+    _refresh_if_stale()
     if not _faqs:
         return "No FAQ categories found. Ensure .claude/faqs/ contains category directories with .md files."
     lines = []
@@ -217,9 +218,7 @@ def get_faq_categories() -> str:
         count = len(_faqs[cat])
         titles = ", ".join(sorted(_faqs[cat]))
         lines.append(f"**{cat}** ({count}): {titles}")
-    result = "\n".join(lines)
-    _schedule_refresh()
-    return result
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -231,9 +230,9 @@ def search_faqs(query: str, category: str | None = None, max_results: int = 5) -
         category: optional category filter
         max_results: max results to return (default 5)
     """
+    _refresh_if_stale()
     results = _index.search(query, category=category, max_results=max_results)
     if not results:
-        _schedule_refresh()
         return f"No results for '{query}'."
 
     lines = []
@@ -263,9 +262,7 @@ def search_faqs(query: str, category: str | None = None, max_results: int = 5) -
         lines.append(
             f"### [{doc.category}] {doc.title} (score: {score:.2f})\n{excerpt}\n"
         )
-    result = "\n".join(lines) + _IMPROVEMENT_FOOTER
-    _schedule_refresh()
-    return result
+    return "\n".join(lines) + _IMPROVEMENT_FOOTER
 
 
 @mcp.tool()
@@ -276,13 +273,13 @@ def get_faq(title: str, category: str | None = None) -> str:
         title: FAQ title (use dashes or spaces, case-insensitive)
         category: optional category to narrow the search
     """
+    _refresh_if_stale()
     title_normalized = title.lower().replace("-", " ")
 
     cats = [category] if category and category in _faqs else sorted(_faqs)
     for cat in cats:
         for faq_title, content in _faqs.get(cat, {}).items():
             if faq_title.lower() == title_normalized:
-                _schedule_refresh()
                 return f"# [{cat}] {faq_title}\n\n{content}" + _IMPROVEMENT_FOOTER
 
     for cat in cats:
@@ -291,10 +288,8 @@ def get_faq(title: str, category: str | None = None) -> str:
                 title_normalized in faq_title.lower()
                 or faq_title.lower() in title_normalized
             ):
-                _schedule_refresh()
                 return f"# [{cat}] {faq_title}\n\n{content}" + _IMPROVEMENT_FOOTER
 
-    _schedule_refresh()
     return f"FAQ '{title}' not found. Use get_faq_categories() to see available FAQs."
 
 

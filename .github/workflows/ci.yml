@@ -54,7 +54,11 @@ jobs:
             "${SENZING_APT_REPOSITORY_URL}/${SENZING_APT_REPOSITORY_NAME}"
           sudo apt-get -y --no-install-recommends install "/tmp/${SENZING_APT_REPOSITORY_NAME}"
           sudo apt-get update
-          sudo apt-get -y --no-install-recommends install libpq5 senzingsdk-runtime jq
+          # The senzingsdk-runtime preinst reads SENZING_ACCEPT_EULA; an empty value drops to an
+          # interactive `read </dev/tty` that hangs forever in CI. sudo resets the environment by
+          # default, so the EULA var must be passed THROUGH sudo (not just exported in the job env).
+          sudo DEBIAN_FRONTEND=noninteractive SENZING_ACCEPT_EULA="${SENZING_ACCEPT_EULA}" \
+            apt-get -y --no-install-recommends install libpq5 senzingsdk-runtime jq
 
       # Fail loudly if the SDK jar is missing rather than compile against a stub.
       - name: Verify Senzing SDK is available

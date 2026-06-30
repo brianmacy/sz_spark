@@ -1,0 +1,13 @@
+version: 2
+
+# Only github-actions is listed: Dependabot has no sbt support, so build.sbt / project deps are NOT
+# auto-managed here (a `maven` ecosystem would only log "no pom.xml" noise). Keep sbt/Scala deps
+# current manually (see NEXT_STEPS / RUNBOOK). The 21-day cooldown gives the security community time
+# to flag a compromised release before it reaches our build; security advisories bypass it.
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 21

@@ -1,0 +1,48 @@
+name: ci
+
+# Compiles and runs the FULL non-integration test suite (unit + concurrency + spark-local
+# with a fake engine). It does NOT run SZ_IT=1 integration tests (those need a live Senzing
+# engine + database) and never builds/publishes the FAT jar (no SDK redistribution).
+#
+# REQUIREMENT: the build compiles against the Senzing Java SDK jar, which is NOT on Maven
+# Central and cannot be redistributed. CI must make a licensed dist available and point
+# SENZING_DIR at it (e.g. a self-hosted runner with senzingsdk-runtime installed, or a
+# private fetch step using your own credentials — see docs/DATABRICKS.md / RUNBOOK.md).
+# Without it, the compile step fails fast by design.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    env:
+      SENZING_DIR: /opt/senzing
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-java@1bcf9fb12cf4aa7d266a90ae39939e61372fe520 # v5.4.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Cache sbt / ivy / coursier
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.sbt
+            ~/.ivy2/cache
+            ~/.cache/coursier
+          key: sbt-${{ runner.os }}-${{ hashFiles('**/build.sbt', 'project/**') }}
+
+      # Provide a licensed Senzing dist at $SENZING_DIR before this point (org-specific;
+      # not committed). Fail loudly if the SDK jar is missing rather than compile against a stub.
+      - name: Verify Senzing SDK is available
+        run: |
+          test -f "$SENZING_DIR/er/sdk/java/sz-sdk.jar" \
+            || { echo "::error::Senzing SDK jar not found at $SENZING_DIR/er/sdk/java/sz-sdk.jar. Provide a licensed dist."; exit 1; }
+
+      - name: Format check + full Spark test suite (excludes SZ_IT integration)
+        run: sbt -v scalafmtCheckAll test

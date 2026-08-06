@@ -1,56 +1,248 @@
 # sz_spark
 
-A reference example for calling the **Senzing V4 SDK** from **Spark/Databricks** jobs against a
-co-located SQL database (PostgreSQL/MSSQL/MySQL), packaged as a self-extracting **FAT jar**.
+Load your data into **Senzing** entity resolution from **Spark / Databricks**, at scale, against a
+co-located SQL database (PostgreSQL / MSSQL / MySQL). The Senzing V4 SDK and its native libraries are
+packaged into a single self-extracting **FAT jar** and run as ordinary Spark jobs — this repo is a
+runnable reference you build once and deploy as a container.
 
-It demonstrates **add/update**, **delete**, and **search** (each producing an output DataFrame plus an
-error DataFrame), and processes **redo** as a scheduled, parallel job. Concurrency is controlled
-entirely by Spark executor/worker count — there is no "threads per worker" knob; each task drives a
-shared per-executor-JVM engine single-threaded.
+It provides:
 
-It also includes a **streaming ingest path** (a parquet inbox → long-running Structured Streaming
-feeder → engine) with:
-- **Dead-letter handling** — failed records are quarantined to a durable `deadLetter` sink instead of
-  being dropped, and can be replayed with the `DeadLetterReprocess` job. See
-  [`docs/DEAD_LETTER.md`](docs/DEAD_LETTER.md).
-- **A `getStats` sampler** — an opt-in Spark plugin (`diag.StatsPlugin`) emits the engine's
-  reset-on-read `getStats()` periodically to the driver log under the `SZ_STATS` prefix, one sampler
-  per executor JVM. See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) §Monitoring.
+- **Batch jobs** — **add/update**, **delete**, and **search** (each writes an output DataFrame plus an
+  error DataFrame), and **redo** as a scheduled, parallel job.
+- **A streaming ingest path** — a durable parquet inbox drained from a message queue → a long-running
+  Structured Streaming feeder → the engine, with a **dead-letter sink** for failed records.
+- **A `getStats` sampler** — an opt-in plugin that periodically emits the engine's self-instrumentation
+  to the driver log under the `SZ_STATS` prefix.
 
-- Architecture (how Senzing runs on Spark): [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- Building the FAT jar: [`docs/BUILD.md`](docs/BUILD.md)
-- Examples (runnable `spark-submit`): [`docs/EXAMPLES.md`](docs/EXAMPLES.md)
-- Performance & sizing (scaling to billions of records): [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)
-- Streaming ingest design (parquet inbox → feeder): [`docs/RABBITMQ_INGEST.md`](docs/RABBITMQ_INGEST.md)
-- Core vs glue vs diag job layering: [`docs/JOB_LAYERING.md`](docs/JOB_LAYERING.md)
-- Dead-letter capture & reprocess: [`docs/DEAD_LETTER.md`](docs/DEAD_LETTER.md)
-- Troubleshooting (Spark-specific failure modes): [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
-- Databricks deployment: [`docs/DATABRICKS.md`](docs/DATABRICKS.md)
-- Design (implementation): [`docs/DESIGN.md`](docs/DESIGN.md)
-- Build plan (milestones + test gates): [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)
-- Ops runbook: [`docs/RUNBOOK.md`](docs/RUNBOOK.md)
-- Deployment tutorials (⚠️ **DRAFT — untested**): [on-prem Spark](docs/tutorials/spark-onprem.md) ·
-  [AWS EMR](docs/tutorials/aws-emr.md) · [Databricks](docs/tutorials/databricks.md)
-- Working agreement / guardrails: [`CLAUDE.md`](CLAUDE.md)
+Concurrency is controlled entirely by Spark executor/worker count — there is no "threads per worker"
+knob; each task drives a shared per-executor-JVM engine single-threaded.
+
+---
 
 ## Build
 
-Requires JDK 17/21, sbt, and a **local licensed Senzing dist** (`senzingsdk-runtime`) — the SDK jar and
-native libs are **not** on Maven Central and **must not** be redistributed. Point `SENZING_DIR` at the
-install (default `/opt/senzing`).
+Two artifacts: the **FAT jar** (needs a licensed Senzing dist; built once) and the **Docker image**
+(wraps the jar with the exact Spark runtime + PostgreSQL client libraries it needs).
+
+### 1. Build the FAT jar
+
+Requires JDK 17/21, sbt, and a **local licensed Senzing dist** (`senzingsdk-runtime`). The SDK jar and
+native libs are **not** on Maven Central and **must not** be redistributed — point `SENZING_DIR` at your
+install (default `/opt/senzing`). Full detail in [`docs/BUILD.md`](docs/BUILD.md).
 
 ```bash
-sbt compile                 # compile against the local SDK jar
-sbt test                    # full non-integration suite (unit + spark-local, fake engine)
-sbt scalafmtAll             # format
-sbt stageNatives            # stage native libs/data/resources/config (local, gitignored)  [M9]
-sbt -J-Xmx8g assembly       # FAT jar (big heap for the native payload)                     [M9]
-./scripts/it-local.sh       # REAL-engine integration tests (SQLite, single-process dev)     [M15]
+export SENZING_DIR=/opt/senzing        # your local licensed install
+sbt stageNatives                       # stage native libs/data/resources/config (gitignored)
+sbt -J-Xmx8g assembly                  # -> target/scala-2.13/sz-spark-assembly.jar  (~265 MB)
 ```
 
-`sbt test` is the fast **plumbing** suite (no engine — unit + spark-local with a fake engine).
-`./scripts/it-local.sh` is the suite that actually exercises **entity resolution**: it stands up a
-real engine on SQLite, runs `InitJob`, then `EngineIT` (real `addRecord`/`searchByAttributes`/redo
-through the Spark jobs). Use a co-located PostgreSQL for anything beyond a single-process smoke.
+### 2. Build the Docker image
 
-The FAT jar, SDK jar, native libs, and `.deb`s are gitignored and never published.
+The image build needs the jar in its context. Copy it to the repo root, then build:
+
+```bash
+cp target/scala-2.13/sz-spark-assembly.jar ./sz-spark-assembly.jar
+docker build -t sz_spark:latest .
+```
+
+The [`Dockerfile`](Dockerfile) rebases the official Spark 4.0.1 image onto Ubuntu 24.04 (the Senzing
+natives need glibc ≥ 2.38) and installs the PostgreSQL client closure the bundled plugin dlopens
+(the `SENZ0087` / chunked-rows fixes). The jar self-extracts its native payload at runtime — the image
+carries **no** `/opt/senzing` install. The jar is gitignored and never published; it only enters the
+build context locally.
+
+---
+
+## Configure
+
+The engine is configured entirely from **`SENZING_ENGINE_CONFIGURATION_JSON`** (an env var / secret —
+never hardcoded). At minimum it carries the SQL connection:
+
+```bash
+export SENZING_ENGINE_CONFIGURATION_JSON='{
+  "PIPELINE":{"CONFIGPATH":"...","RESOURCEPATH":"...","SUPPORTPATH":"..."},
+  "SQL":{"CONNECTION":"postgresql://USER:PASS@DBHOST:5432/senzing"}}'
+export PGSSLMODE=require        # for managed/cloud Postgres; "disable" only for a local no-SSL dev PG
+```
+
+In FAT-jar mode the runtime rewrites the three `PIPELINE` paths to the self-extracted trees, so their
+values are placeholders. Generate the JSON **attribute mapping** for your records with the Senzing-MCP
+`mapping_workflow` — a wrong mapping silently degrades resolution rather than erroring.
+
+**Initialize the database schema first (run once).** `InitJob` applies the schema DDL and registers the
+default config plus your data sources. It is a standalone JVM step — never run it on an executor, and
+never inside a data job. `dataSources=` here **registers** the data source codes in the config (this is
+distinct from the record-level `DATA_SOURCE` in the input contract below).
+
+```bash
+docker run --rm \
+  -e SENZING_ENGINE_CONFIGURATION_JSON \
+  -e PGSSLMODE \
+  sz_spark:latest \
+  java -cp /opt/sz/sz-spark-assembly.jar com.senzing.spark.jobs.InitJob \
+    dialect=postgresql \
+    db='jdbc:postgresql://DBHOST:5432/senzing?sslmode=require&user=USER&password=PASS' \
+    dataSources=CUSTOMERS,WATCHLIST
+```
+
+`db=<jdbcUrl>` is **required** for postgresql/mysql/mssql (omit only for SQLite, which auto-creates).
+Without it the schema step is silently skipped and later jobs fail as "engine not initialized".
+
+---
+
+## Run
+
+Every job is a `spark-submit` from the one jar. Because `libSz` dlopens plugins **by soname**,
+`LD_LIBRARY_PATH` must point at the jar's self-extract `lib/` dir **at JVM launch** — a per-jar path
+`$SENZING_EXTRACT_DIR/sz-spark-<sha256-of-jar>/lib`. The snippet below computes it; reuse it in each
+example.
+
+```bash
+# Common docker-run scaffold. Mount your data, pass the engine config, set LD_LIBRARY_PATH.
+ECJ="$SENZING_ENGINE_CONFIGURATION_JSON"
+run() {   # run <spark-submit-and-jar-args...>
+  docker run --rm \
+    -e SENZING_ENGINE_CONFIGURATION_JSON="$ECJ" -e PGSSLMODE=require \
+    -v "$PWD/data:/data" \
+    sz_spark:latest bash -lc '
+      JAR=/opt/sz/sz-spark-assembly.jar
+      SHA=$(sha256sum "$JAR" | cut -d" " -f1)
+      export LD_LIBRARY_PATH="$SENZING_EXTRACT_DIR/sz-spark-$SHA/lib"
+      '"$*"
+}
+```
+
+### Add / update (and delete)
+
+`addRecord` per record with info; writes deduped **affected entity IDs** + an error frame. `DeleteJob`
+is identical with `--class ...DeleteJob`.
+
+```bash
+run 'spark-submit --class com.senzing.spark.jobs.AddUpdateJob \
+  --conf spark.speculation=false \
+  --conf spark.executor.cores=4 \
+  --conf spark.executor.memory=2g \
+  --conf spark.executor.memoryOverhead=8g \
+  "$JAR" \
+  input=/data/customers.jsonl \
+  output=/data/out/affected errors=/data/out/errors staging=/data/out/staging \
+  partitions=64 runId=load-1'
+```
+
+There is **no `dataSource=` argument** — each record supplies its own `DATA_SOURCE` (see Input contract).
+`memoryOverhead ≈ (4 + cores) GB` because the engine is native/off-heap (see
+[`docs/RUNBOOK.md`](docs/RUNBOOK.md)).
+
+### Search
+
+`searchByAttributes` per request; writes **request paired with results** + an error frame. Read-only.
+
+```bash
+run 'spark-submit --class com.senzing.spark.jobs.SearchJob \
+  --conf spark.executor.cores=4 --conf spark.executor.memoryOverhead=8g \
+  "$JAR" \
+  input=/data/search-requests.jsonl \
+  output=/data/out/search-results errors=/data/out/search-errors staging=/data/out/search-staging \
+  partitions=64 runId=search-1'
+```
+
+### Redo (scheduled)
+
+`RedoJob` drains the engine's redo queue and processes it in parallel. Run it on a **schedule** (the
+queue refills; `getRedoRecord()==null` is **not** "done"); run **one** instance at a time.
+
+```bash
+run 'spark-submit --class com.senzing.spark.jobs.RedoJob \
+  --conf spark.executor.cores=4 --conf spark.executor.memoryOverhead=8g \
+  "$JAR" \
+  output=/data/out/redo-affected errors=/data/out/redo-errors staging=/data/out/redo-staging \
+  partitions=64 redoBatch=100000 runId=redo-1'
+```
+
+### Streaming ingest (queue → parquet inbox → feeder)
+
+Two decoupled stages joined by a durable **parquet inbox** (full design in
+[`docs/RABBITMQ_INGEST.md`](docs/RABBITMQ_INGEST.md)):
+
+**Stage 1 — the drainer** (`glue.MqToParquet`): a plain-JVM competing consumer that reads records off a
+message queue and writes parquet shards, acking **only after** each shard is persisted (write-ahead, so
+records are never dropped). Run it next to the queue.
+
+```bash
+run 'spark-submit --class com.senzing.spark.glue.MqToParquet "$JAR" \
+  amqpUrl=amqp://USER:PASS@MQHOST:5672/%2F queue=YOUR_QUEUE \
+  inbox=/data/io/inbox prefetch=5000 shardRecords=5000 emptyMs=30000'
+```
+
+**Stage 2 — the feeder** (`glue.ParquetStreamFeeder`): a long-running Structured Streaming query that
+reads the inbox and `addRecord`s each micro-batch, with durable **dead-letter** and change-feed sinks.
+
+```bash
+run 'spark-submit --class com.senzing.spark.glue.ParquetStreamFeeder \
+  --conf spark.speculation=false \
+  --conf spark.executor.cores=4 --conf spark.executor.memoryOverhead=8g \
+  "$JAR" \
+  inbox=/data/io/inbox checkpoint=/data/io/checkpoint archive=/data/io/archive \
+  staging=/data/io/staging \
+  deadLetter=/data/io/deadletter output=/data/io/output \
+  maxFilesPerTrigger=200 trigger=default runId=stream-1'
+```
+
+Failed records are written to `deadLetter=` (not dropped, not silently defaulted) and can be replayed
+with `glue.DeadLetterReprocess`. See [`docs/DEAD_LETTER.md`](docs/DEAD_LETTER.md).
+
+---
+
+## Input contract (required per record)
+
+Each input record is standard Senzing **mapped JSON** (one JSON object per line, JSONL). Every record
+**must carry its own** `DATA_SOURCE` **and** `RECORD_ID` in the JSON body — both are read from the
+record itself (there is no per-job `dataSource=` argument). A record missing **either** key is routed
+to the **dead-letter** sink as `BAD_INPUT` **without calling the engine** — it is never loaded and never
+silently defaulted.
+
+```json
+{"DATA_SOURCE":"CUSTOMERS","RECORD_ID":"1001","PRIMARY_NAME_FULL":"Jane Doe", "...": "..."}
+```
+
+The `DATA_SOURCE` value must have been **registered** first via `InitJob dataSources=…`; an unregistered
+source is a config error routed to the error frame. Use the Senzing-MCP `mapping_workflow` for the
+attribute mapping.
+
+---
+
+## Monitoring
+
+- **`SZ_STATS` sampler** — set `--conf spark.plugins=com.senzing.spark.diag.StatsPlugin` to emit the
+  engine's reset-on-read `getStats()` periodically to the driver log (one sampler per executor JVM). See
+  [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) §Monitoring.
+- Watch per-task progress lines (interval + cumulative rate) and `LONG_RECORD` warnings.
+- `countRedoRecords()` is a coarse health gauge only — **never** a loop condition.
+
+Results: the affected-entity frame is a change-**notification** feed (IDs only) — re-query
+`getEntity` / `getEntityByRecordId` per affected ID for settled content (see
+[`docs/RUNBOOK.md`](docs/RUNBOOK.md) "Reading results").
+
+---
+
+## Documentation
+
+- Architecture (how Senzing runs on Spark): [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- Runnable `spark-submit` examples: [`docs/EXAMPLES.md`](docs/EXAMPLES.md)
+- Performance & sizing (scaling to billions of records): [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)
+- Streaming ingest design (queue → inbox → feeder): [`docs/RABBITMQ_INGEST.md`](docs/RABBITMQ_INGEST.md)
+- Dead-letter capture & reprocess: [`docs/DEAD_LETTER.md`](docs/DEAD_LETTER.md)
+- Core vs glue vs diag job layering: [`docs/JOB_LAYERING.md`](docs/JOB_LAYERING.md)
+- Troubleshooting (Spark-specific failure modes): [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
+- Ops runbook: [`docs/RUNBOOK.md`](docs/RUNBOOK.md)
+- Deployment tutorials (⚠️ **DRAFT — untested**): [on-prem Spark](docs/tutorials/spark-onprem.md) ·
+  [AWS EMR](docs/tutorials/aws-emr.md) · [Databricks](docs/tutorials/databricks.md)
+- Databricks reference: [`docs/DATABRICKS.md`](docs/DATABRICKS.md)
+- Design (implementation): [`docs/DESIGN.md`](docs/DESIGN.md)
+
+### Developing
+
+Contributors building/testing without Docker: `sbt compile`, `sbt test` (fast plumbing suite — unit +
+spark-local with a fake engine), `sbt scalafmtAll`, and `./scripts/it-local.sh` (real-engine
+integration on SQLite). Full workflow in [`docs/BUILD.md`](docs/BUILD.md). SQLite is dev-only (no
+concurrent writes) — use a co-located PostgreSQL for anything beyond a single-process smoke.

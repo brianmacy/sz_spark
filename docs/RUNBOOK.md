@@ -61,7 +61,10 @@ side effects). **Do not** partition input by a resolution key (name/address/zip)
 - **Redo** → `RedoJob`, run on a **schedule** (the redo queue refills; `getRedoRecord()==null` is not
   "done"). A single driver-side dequeuer feeds parallel `processRedoRecord` across tasks.
 
-Args: `input=… output=… errors=… staging=… dataSource=… partitions=N runId=… [redoBatch=N]`.
+Args: `input=… output=… errors=… staging=… partitions=N runId=… [redoBatch=N]`. There is **no**
+per-job `dataSource=` load argument — each record supplies its own `DATA_SOURCE` and `RECORD_ID` in its
+JSON body (both required; a record missing either is dead-lettered as `BAD_INPUT` without an engine
+call). `InitJob`'s `dataSources=` registration argument is separate and unaffected.
 
 ## Reading results (consistency)
 

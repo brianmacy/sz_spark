@@ -4,21 +4,10 @@
 unit-tested**, including the dead-letter/output sinks (see [`DEAD_LETTER.md`](DEAD_LETTER.md)); the
 Stage 1 drainer is a standalone plain-JVM consumer (design below). Not yet run on a multi-node
 cluster.
-**Goal:** let Spark executors consume Senzing JSON records off a **RabbitMQ** queue and `addRecord`
-them into the shared datastore, so a Spark loader can run as a *competing consumer* alongside a Rust
-`sz_rabbit_consumer` fleet on the **same queue** and **same DB**.
-
-## Motivating deployment (the perf rig)
-- A publisher feeds the full **~1B-record corpus** into one RabbitMQ queue
-  (`senzing-rabbitmq-queue`).
-- **App host A** keeps the **Rust** consumer fleet.
-- **App host B** stops its Rust fleet and runs the **Spark** feeder instead.
-- Both pull the **same** queue → RabbitMQ's exclusive per-message delivery partitions the work with
-  **zero coordination and no dedup**. Both `addRecord` into the same PostgreSQL database.
-- Net: a clean **Rust-vs-Spark same-DB loader A/B**. (MQ has ample headroom; the ceiling is engine+DB
-  add throughput, so this is a per-loader comparison, not an MQ-bound one.) See
-  [`PERFORMANCE.md`](PERFORMANCE.md) for the measured outcome — the two loader sources are
-  performance-equivalent at the same duty cycle.
+**Goal:** let Spark consume Senzing JSON records off a **RabbitMQ** queue and `addRecord` them into your
+datastore. The Spark loader runs as a **competing consumer** — it can run alongside any other consumers
+on the same queue, and RabbitMQ's exclusive per-message delivery partitions the work across all of them
+with **zero coordination and no dedup**. All consumers `addRecord` into the same database.
 
 ## The insight: source and processor are already separated
 Every sz_spark data job is `source → Dataset[InputRecord] → shared processor`, where
@@ -45,11 +34,10 @@ Both "ack from the driver" options are dead:
    ack would trip it.
 
 ⇒ The channel + `basic_qos` prefetch + ack must live **inside the executor, co-located with
-`addRecord`** — exactly the MQ management the Rust consumer does. Per the FAQ
-`architecture/consumer-redoer-concurrency`, the Rust consumer uses **one `Connection`+`Channel`,
-`basic_qos(prefetch = threads)`, and ack/reject only on the channel-owning task**; it works because
-the ack is in-process and each in-flight (unacked) message is being actively worked, so it clears the
-`consumer_timeout` comfortably.
+`addRecord`** — the same MQ management a typical single-process Senzing RabbitMQ consumer does: **one
+`Connection`+`Channel`, `basic_qos(prefetch = threads)`, and ack/reject only on the channel-owning
+task**. That works because the ack is in-process and each in-flight (unacked) message is being actively
+worked, so it clears the `consumer_timeout` comfortably.
 
 Note also: `RedoSource`'s driver-side single-consumer choice is about the *engine* redo queue
 ("undemonstrated concurrent multi-consumer `getRedoRecord()`") — NOT applicable here; competing
@@ -97,11 +85,10 @@ spark.readStream.format("parquet").schema(inputRecordSchema)
      }
      .start()   // default micro-batch, LONG-RUNNING
 ```
-- **Long-running micro-batch query** (decision, 2026-08-06, reverses the earlier one-shot): a fresh
-  executor JVM per invocation would re-pay native self-extraction + `SzEnvironment` build + DB-connection
-  setup against the large pre-existing corpus *every run*; a persistent query amortizes it (the reason the
-  engine is per-JVM) and mirrors the Rust fleet's always-on model → **fairer A/B**. `Trigger.AvailableNow`
-  remains available for scheduled-batch use.
+- **Long-running micro-batch query** (not a fresh JVM per batch): a fresh executor JVM per invocation
+  would re-pay native self-extraction + `SzEnvironment` build + DB-connection setup on *every* run; a
+  single persistent Structured Streaming query amortizes that engine/native init across the whole run
+  (the reason the engine is per-JVM). `Trigger.AvailableNow` remains available for scheduled-batch use.
 - **Checkpoint = exactly-once file feeding** (each file feeds exactly one committed batch; never re-fed).
   `cleanSource=archive` replaces move-to-`done/`. `maxFilesPerTrigger` gives backpressure.
 - **NO per-batch repartition.** The file source's own partitions feed the executor slots directly, so
@@ -129,25 +116,27 @@ spark.readStream.format("parquet").schema(inputRecordSchema)
 - Engine concurrency (Stage 2): one engine per executor JVM under the **read** lock (write lock only for
   config-drift reinit) — concurrency = `spark.executor.cores`.
 - Failure taxonomy reused (`ErrorTaxonomy`/`Backoff`/`CircuitBreaker`).
-- **Throughput metric shifts:** MQ ack rate now measures Stage-1 persist rate, NOT ER throughput. Compare
-  the Rust-vs-Spark A/B by **engine-thread duty cycle** and invariant per-record counters (see
-  PERFORMANCE.md), or DB-side by resolved-row deltas — not wall clock on a shared, growing DB.
+- **What the MQ ack rate measures:** with the two-stage design, MQ ack rate reflects the Stage-1
+  **persist** rate, NOT end-to-end ER throughput. To gauge actual load progress, watch **engine-thread
+  duty cycle** and per-record counters (see [`PERFORMANCE.md`](PERFORMANCE.md)), or DB-side
+  resolved-row deltas.
 
 ## Alternative — inline executor-side competing consumers (NOT recommended for now)
 Each `mapPartitions` task owns its own channel, `consume → addRecord → ack` inline, prefetch small
-(2–4), bounded by quota/idle-timeout, re-run on a schedule. Mirrors the Rust consumer most closely and
-avoids the intermediate parquet, but couples ack to ER latency (per-record processing must stay well
+(2–4), bounded by quota/idle-timeout, re-run on a schedule. Mirrors a typical single-process RabbitMQ
+consumer most closely and avoids the intermediate parquet, but couples ack to ER latency (per-record processing must stay well
 under `consumer_timeout`) and makes the job a long-running consume loop rather than a batch job. Keep as
 a fallback; the two-stage buffer above is simpler to get correct.
 
 ## Redo is a SEPARATE, already-built concern
 Two different queues — do not conflate:
-- **RabbitMQ queue** = input records → consumed by the Rust fleet + the Spark feeder.
-- **Engine redo queue** = `SYS_EVAL_QUEUE` in the shared DB, generated by every `addRecord`. It is
+- **RabbitMQ queue** = input records → consumed by the Spark feeder (and any other consumers on the
+  queue).
+- **Engine redo queue** = `SYS_EVAL_QUEUE` in the database, generated by every `addRecord`. It is
   **global in the database** and already handled by the existing **`RedoJob`** (driver-side
-  `getRedoRecord` drain → parallel `processRedoRecord`). We **reuse `RedoJob` unchanged**, run on a
-  schedule, exactly as the Rust fleet runs redoers. Spark `RedoJob` and Rust redoers both drain the
-  shared DB redo queue safely (PG `FOR UPDATE SKIP LOCKED`). **No new redo code.**
+  `getRedoRecord` drain → parallel `processRedoRecord`). **Reuse `RedoJob` unchanged** and run it on a
+  schedule. It drains the shared DB redo queue safely (PG `FOR UPDATE SKIP LOCKED`), so multiple redoers
+  can drain concurrently. **No new redo code.**
 
 ## Job args
 ### Stage 1 — `RabbitMqSource`
@@ -174,12 +163,14 @@ Two different queues — do not conflate:
 
 > There is **no** `partitions` / per-batch repartition arg — it was removed as dead weight (above).
 
-Records carry their `DATA_SOURCE` + a hash `RECORD_ID`; `RECORD_ID` is parsed from the body
-(as `RecordJob.readRecords` does), and the add is stamped with the configured `dataSource`.
+Each record supplies **both** its `DATA_SOURCE` and its `RECORD_ID` in the JSON body; both are parsed
+from the body (exactly as `RecordJob.readRecords` does) — there is no configured/launch `dataSource`.
+A record missing either key is minted with the empty key(s) and dead-lettered as `BAD_INPUT` at the
+engine seam, never silently stamped.
 
 **Failed records are captured, not dropped.** `AddCore.run` returns `SplitResult(good, errors)`; the
-feeder persists `errors` to `deadLetter=` (the DLQ equivalent of the Rust consumer's RabbitMQ
-dead-letter queue) and `good` to `output=`. Reprocess with `glue.DeadLetterReprocess`. Full contract,
+feeder persists `errors` to `deadLetter=` (the DLQ equivalent of a RabbitMQ dead-letter queue) and
+`good` to `output=`. Reprocess with `glue.DeadLetterReprocess`. Full contract,
 the terminal-vs-reprocessable category split, and the Databricks **Delta quarantine table** variant
 are in **[`DEAD_LETTER.md`](DEAD_LETTER.md)**.
 
@@ -187,43 +178,47 @@ are in **[`DEAD_LETTER.md`](DEAD_LETTER.md)**.
 `com.rabbitmq:amqp-client` (**Apache-2.0** ✓). **Bundled** (not `Provided`) — the cluster does not
 ship it. Pin to latest 5.x; add to `build.sbt` `libraryDependencies`.
 
-## Cluster / build notes (perf rig)
+## Cluster / build notes
 - The staged Spark dist and the build target should match; bump `sparkVersion` to the staged dist's
   version and rebuild (Scala 2.13 unchanged, low risk under `Provided`) so the jar matches the cluster.
 - ⚠ sz_spark has **never run on a real multi-node cluster** (its own STATUS gap #1). First cluster
   bring-up (Spark standalone master+workers, `SENZING_ENGINE_CONFIGURATION_JSON` → the DB, native
   self-extract via `LD_LIBRARY_PATH=$SENZING_EXTRACT_DIR/<sha>/lib`) is first-time and its own risk.
   Smoke with `SelfCheck` on one node first.
-- Engine build: the app hosts may run a locally **patched** engine (e.g. a cold-start guard + arena
-  change) while the smoke host uses the stock dist — record any such mismatch as a **provenance
-  confound** for the A/B.
+- Engine build: run the **same engine build on every node** — a mismatch between nodes changes ER
+  behavior and makes results inconsistent.
 
-## Engine config (authoritative, from the running fleet)
+## Engine config (when attaching to an existing datastore)
 `SENZING_ENGINE_CONFIGURATION_JSON` →
-`{"SQL":{"CONNECTION":"postgresql://senzing:…@<db-host>:5432:<db>"}}`
-plus the fleet's engine settings (ADVISORY + deferred-write + RES_ENT.FEATURES — match the fleet).
-**Do NOT run `InitJob`** — the schema, config, and pre-existing records already exist.
+`{"SQL":{"CONNECTION":"postgresql://USER:PASS@<db-host>:5432:<db>"}}`
+plus the same engine settings the existing loaders use, so both write compatibly.
+**Do NOT run `InitJob`** when the schema, config, and records already exist — only initialize a fresh
+datastore.
 
-## Measurement (the A/B)
-Prefer **engine-thread duty cycle** and **invariant per-record counters** over wall clock (the DB is
-shared and growing — see PERFORMANCE.md §"Measured findings"). For completeness, per-loader ack rate
-can be split by consumer tag via RabbitMQ per-consumer stats, and resolved-row deltas confirm
-completion.
+## Monitoring progress
+The MQ ack rate reflects the Stage-1 persist rate, not end-to-end ER throughput (Stage 1 acks on
+persist, well before the record resolves). To watch actual load progress:
+- **engine-thread duty cycle** and per-record counters (see [`PERFORMANCE.md`](PERFORMANCE.md)); and
+- **DB-side resolved-row deltas**, which confirm completion.
 
-## Resolved (Fable review, 2026-08-06)
-- Stage 1 = **plain JVM consumer run OUTSIDE Spark**, next to RabbitMQ (a Spark job there wastes a
-  cluster + re-imports the `consumer_timeout` coupling). Writes parquet, tmp-then-rename, persist-then-ack.
+Per-consumer ack rate is available via RabbitMQ per-consumer stats if you want to see each consumer's
+Stage-1 throughput separately.
+
+## Design summary
+- Stage 1 = **plain JVM consumer run OUTSIDE Spark**, next to RabbitMQ (running it as a Spark job wastes
+  a cluster and re-imports the `consumer_timeout` coupling). Writes parquet, tmp-then-rename,
+  persist-then-ack.
 - Stage 2 = **long-running Structured Streaming file-source feeder + `foreachBatch(AddCore)`** (not a
   hand-rolled one-shot), **no per-batch repartition**, with durable dead-letter/output sinks.
   `cleanSource=archive`, checkpoint. Auto Loader is the DBR-only glue variant.
-- Interchange = **plain Parquet** for the transient inbox; Delta only for OUTPUT/dead-letter frames on
-  Databricks.
+- Interchange = **plain Parquet** for the transient inbox; Delta only for the output/dead-letter frames
+  on Databricks.
 
-## Still open for the user
+## Configuration to confirm for your deployment
 1. `shardRecords` / persist-batch size (parquet shard granularity vs ack cadence).
-2. Split the Spark app host (half Rust / half Spark) or run it **all-Spark**?
-3. `inbox`/`checkpoint`/`archive` on a **shared volume both hosts mount** — confirm.
+2. `inbox` / `checkpoint` / `archive` must live on storage reachable by **both** the Stage-1 drainer and
+   **all** Spark nodes (a shared volume or object store) — confirm the path is mountable everywhere.
 
-## Doc fix flagged (DATABRICKS.md)
-"DBR 14+" is wrong for Spark 4.0/Scala 2.13 ⇒ **DBR 17.x**; sz_spark needs `LD_LIBRARY_PATH`/init scripts
-⇒ **classic dedicated (single-user) clusters, serverless is out**; pin cluster size for a long-running query.
+> **Databricks version note:** target **DBR 17.x** (Spark 4.0 / Scala 2.13); sz_spark needs
+> `LD_LIBRARY_PATH` + cluster init scripts, so use **classic dedicated (single-user) clusters** —
+> serverless is out — and pin the cluster size for a long-running query.

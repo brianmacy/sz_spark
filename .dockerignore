@@ -1,0 +1,27 @@
+# Keep the Docker build context small and free of the licensed dist.
+# The ONLY large artifact the build needs is sz-spark-assembly.jar (copied into the
+# context root by the build steps in the Dockerfile header); everything else is noise.
+
+# Build output / IDE / VCS
+target/
+project/target/
+project/project/
+.git/
+.github/
+.idea/
+.bsp/
+*.class
+
+# Staged native payload + licensed dist (never ship these; they are gitignored too)
+src/main/resources/native/
+**/*.deb
+.debs/
+
+# Docs and scratch — not needed to build the image
+docs/
+*.md
+scripts/
+
+# Local config / secrets
+config/license.env
+*.env

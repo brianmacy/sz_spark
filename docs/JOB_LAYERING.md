@@ -58,10 +58,10 @@ current `RedoJob` shape. Everything else takes a DataFrame from glue.
   this refactor mostly moves the *input reading* out of the `*Job` objects into glue and leaves a thin
   core entry point that takes `Dataset[InputRecord]`.
 
-## Why this matters here (the perf rig)
-- The Spark loader = **glue `MqToParquet`** (drains the same queue as the Rust fleet, MQ-exclusive
-  split) → **core `AddCore`** (from parquet) + **core `RedoCore`** (engine queue). Rust on one app
-  host vs Spark on the other, same shared database.
+## Why this matters here (the reference A/B)
+- The Spark loader = **glue `MqToParquet`** (drains the same queue as the reference consumer
+  fleet, MQ-exclusive split) → **core `AddCore`** (from parquet) + **core `RedoCore`** (engine queue). A
+  reference consumer on one app host vs Spark on the other, same shared database.
 - Clean layering also makes the A/B honest: the core is identical regardless of transport, so a
   transport swap (file vs MQ) can't quietly change the ER path.
 
@@ -73,7 +73,7 @@ current `RedoJob` shape. Everything else takes a DataFrame from glue.
 2. **Stage-2 feeder is a LONG-RUNNING Structured Streaming query** (revised 2026-08-06 after the Fable
    Databricks-naturalness review, reversing the earlier one-shot choice): `readStream.format("parquet")`
    → `foreachBatch(AddCore.run)` with checkpoint + `cleanSource=archive`. A one-shot per invocation
-   re-pays per-JVM native/engine init every run and diverges from the always-on Rust fleet; a persistent
+   re-pays per-JVM native/engine init every run and diverges from an always-on reference consumer fleet; a persistent
    query amortizes init and makes the A/B fair. `Trigger.AvailableNow` kept for scheduled-batch use. (The
    MQ→parquet Stage-1 drainer remains a standalone always-on plain-JVM process, not a Spark job.)
 3. **`GetCore` deferred** — not needed for the load A/B (affected-entity IDs suffice). Build

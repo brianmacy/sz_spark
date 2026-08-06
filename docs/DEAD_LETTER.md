@@ -96,7 +96,7 @@ the portable core. The `errors` frame handed to the writer is identical; only th
 differs.
 
 ## Parallels and the risk it removes
-- **Rust RabbitMQ consumer:** an add failure past its retry budget is `nack`'d to a RabbitMQ
+- **Reference RabbitMQ consumer:** an add failure past its retry budget is `nack`'d to a RabbitMQ
   **dead-letter queue** for later review/redrive. The Parquet dead-letter dir here is that DLQ's
   on-prem equivalent — same purpose, file-based sink.
 - **Silent-orphan risk (the reason this exists):** without a DLQ, a record with a `DSRC_RECORD` but

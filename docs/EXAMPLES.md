@@ -21,12 +21,16 @@ All four data jobs parse simple `key=value` arguments:
 | `output` | output DataFrame path (**Parquet**) | `output` |
 | `errors` | error DataFrame path (Parquet) | `errors` |
 | `staging` | staging table path (single-write-then-split) | `staging` |
-| `dataSource` | the registered data source code for add/delete | — |
 | `partitions` | random repartition count (tune to total executor cores) | `0` (no repartition) |
 | `runId` | tag stamped on output rows | `run` |
 | `redoBatch` | redo dequeue batch size (RedoJob only) | `100000` |
 
 - **Input is JSONL**, output/errors are **Parquet**.
+- **Input contract:** each record's JSON body **must** carry its own `DATA_SOURCE` **and** `RECORD_ID`
+  (both are read from the record; there is no per-job `dataSource=` load argument). A record missing
+  either key is routed to the dead-letter / error frame as `BAD_INPUT` **without** an engine call — it is
+  never loaded and never silently defaulted. (This is distinct from `InitJob`'s `dataSources=` argument,
+  which **registers** data source codes in the config — see §1.)
 - The engine config comes from `SENZING_ENGINE_CONFIGURATION_JSON` (never hardcoded). Set
   `PGSSLMODE=require` for cloud Postgres.
 - Concurrency = executor cores; partition **randomly**, never by a resolution key.
@@ -34,7 +38,7 @@ All four data jobs parse simple `key=value` arguments:
 ## 0. Environment and engine configuration JSON
 
 ```bash
-export SENZING_ENGINE_CONFIGURATION_JSON='{"PIPELINE":{...},"SQL":{"CONNECTION":"postgresql://user:pass@db-host:5432:G2/"}}'
+export SENZING_ENGINE_CONFIGURATION_JSON='{"PIPELINE":{...},"SQL":{"CONNECTION":"postgresql://user:pass@db-host:5432:senzing/"}}'
 export PGSSLMODE=require                     # cloud Postgres
 JAR=target/scala-2.13/sz-spark-assembly.jar  # built per docs/BUILD.md
 ```
@@ -51,7 +55,7 @@ JVM step — **never** run it on an executor.
 # dialect: postgresql (default) | mysql | mssql ; SQLite auto-creates (omit db=)
 java -cp "$JAR" com.senzing.spark.jobs.InitJob \
   dialect=postgresql \
-  db='jdbc:postgresql://db-host:5432/G2?sslmode=require' \
+  db='jdbc:postgresql://db-host:5432/senzing?sslmode=require' \
   dataSources=CUSTOMERS,WATCHLIST
 ```
 
@@ -77,7 +81,6 @@ spark-submit --class com.senzing.spark.jobs.AddUpdateJob \
   --conf spark.executor.memoryOverhead=8g \
   "$JAR" \
   input=/data/customers.jsonl \
-  dataSource=CUSTOMERS \
   output=/out/affected \
   errors=/out/errors \
   staging=/out/staging \

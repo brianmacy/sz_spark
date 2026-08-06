@@ -1,4 +1,4 @@
-package com.senzing.spark.jobs
+package com.senzing.spark.core
 
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.functions.col

@@ -1,4 +1,4 @@
-package com.senzing.spark.jobs
+package com.senzing.spark.core
 
 import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicInteger

@@ -2,10 +2,23 @@
 
 ## Immediate (pre-merge)
 
-1. **User reviews and approves the first commit.**
+1. **User reviews and approves the current changelist** (branch `bem_rabbitmq_ingest`): dead-letter
+   capture + `DeadLetterReprocess`, the `diag.StatsPlugin` `getStats` sampler, the per-batch
+   repartition removal, and the accompanying docs.
    - Run `git diff --stat` / `git status` for a full tree view.
-   - When approved, commit with a message covering the full M0–M16 build.
-   - Nothing in the working tree is staged; no destructive operations will run without explicit approval.
+   - Nothing is staged; no destructive operations will run without explicit approval.
+   - ⚠ Before committing, decide on the customer-codename `DATA_SOURCE` literals in
+     `ParquetStreamFeederSpec.scala` — a codename in a committed test fixture. Replace with a neutral
+     value (e.g. `TEST_DS`) if it should not ship.
+
+## Streaming ingest (this branch)
+
+1a. **Build Stage 1 `RabbitMqSource`** — the plain-JVM MQ→parquet drainer (persist-then-ack) is
+    designed in `docs/RABBITMQ_INGEST.md` but not yet implemented; only the Stage 2 feeder exists.
+
+1b. **Exercise the feeder end-to-end** on a cluster: dead-letter capture on real failures, then
+    `DeadLetterReprocess` replay; confirm the `SZ_STATS` sampler lands one central stream in the
+    driver log with `--conf spark.plugins=com.senzing.spark.diag.StatsPlugin`.
 
 2. **Hash-pin CI actions** — ✅ DONE. `.github/workflows/ci.yml` SHA-pins the latest majors
    (`actions/checkout@…9c091bb # v7.0.0`, `actions/setup-java@…1bcf9fb # v5.4.0`,

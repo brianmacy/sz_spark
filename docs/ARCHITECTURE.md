@@ -75,6 +75,10 @@ A per-record error taxonomy routes failures instead of crashing the task:
 → FAQ `architecture/error-handling`. The verbs are synchronous, **uncancellable** JNI calls, so a slow
 record is logged (`LONG_RECORD`) but never aborted. → FAQ `troubleshooting/slow-records`.
 
+The error rows are not just counted — in the streaming feeder (`glue.ParquetStreamFeeder`) they are
+persisted to a durable **dead-letter** sink so a failed record is never a silent orphan, and the
+reprocessable ones can be replayed with `glue.DeadLetterReprocess`. → [`DEAD_LETTER.md`](DEAD_LETTER.md).
+
 ## Single-pass execution, two sinks
 
 Engine calls are **side effects that must run exactly once**. Writing one lazy DataFrame to two sinks

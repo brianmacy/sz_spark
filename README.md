@@ -8,10 +8,22 @@ error DataFrame), and processes **redo** as a scheduled, parallel job. Concurren
 entirely by Spark executor/worker count — there is no "threads per worker" knob; each task drives a
 shared per-executor-JVM engine single-threaded.
 
+It also includes a **streaming ingest path** (a parquet inbox → long-running Structured Streaming
+feeder → engine) with:
+- **Dead-letter handling** — failed records are quarantined to a durable `deadLetter` sink instead of
+  being dropped, and can be replayed with the `DeadLetterReprocess` job. See
+  [`docs/DEAD_LETTER.md`](docs/DEAD_LETTER.md).
+- **A `getStats` sampler** — an opt-in Spark plugin (`diag.StatsPlugin`) emits the engine's
+  reset-on-read `getStats()` periodically to the driver log under the `SZ_STATS` prefix, one sampler
+  per executor JVM. See [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) §Monitoring.
+
 - Architecture (how Senzing runs on Spark): [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Building the FAT jar: [`docs/BUILD.md`](docs/BUILD.md)
 - Examples (runnable `spark-submit`): [`docs/EXAMPLES.md`](docs/EXAMPLES.md)
 - Performance & sizing (scaling to billions of records): [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)
+- Streaming ingest design (parquet inbox → feeder): [`docs/RABBITMQ_INGEST.md`](docs/RABBITMQ_INGEST.md)
+- Core vs glue vs diag job layering: [`docs/JOB_LAYERING.md`](docs/JOB_LAYERING.md)
+- Dead-letter capture & reprocess: [`docs/DEAD_LETTER.md`](docs/DEAD_LETTER.md)
 - Troubleshooting (Spark-specific failure modes): [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
 - Databricks deployment: [`docs/DATABRICKS.md`](docs/DATABRICKS.md)
 - Design (implementation): [`docs/DESIGN.md`](docs/DESIGN.md)

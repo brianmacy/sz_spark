@@ -5,11 +5,85 @@ How to size and tune a Senzing-on-Spark deployment for high throughput, includin
 SDK performance model** — this document maps that model onto Spark's executor/core knobs and the
 **co-located SQL database**.
 
-> **No observed benchmark numbers yet.** This project has not been run at cluster scale, so this
-> document gives the **tuning model, the knobs, and Senzing's published guidance** — not measured
-> throughput for this codebase. The "Benchmarking" section below is the plan to produce real numbers;
-> until it runs, do not quote a records/sec figure for sz_spark. Concrete numbers depend on data,
-> config, hardware, and database, as Senzing's own guidance stresses.
+> **No published cluster-scale records/sec yet.** This project has not been benchmarked for a
+> headline throughput figure, so this document gives the **tuning model, the knobs, and Senzing's
+> published guidance** — not a records/sec number for this codebase. The "Benchmarking" section below
+> is the plan to produce one; until it runs, do not quote a records/sec figure for sz_spark. Concrete
+> numbers depend on data, config, hardware, and database, as Senzing's own guidance stresses.
+> **Component-level A/B findings do exist** (loader-source equivalence and the repartition removal) —
+> see "Measured findings" immediately below. They are duty-cycle and micro-cost measurements, not
+> throughput figures, so they do not contradict the caveat above.
+
+## Measured findings: loader-source A/B and the repartition removal
+
+Findings from comparing the **Rust queue consumer** against the **Spark streaming feeder** as the
+record source, both driving the identical engine `add_record` against a shared, growing
+(~1B-record) corpus on the same database.
+
+### 1. The per-batch `repartition(N)` was removed — it was pure overhead
+The feeder used to `repartition(N)` inside `foreachBatch` before handing the batch to the engine
+pass. It was removed:
+
+- It inserted a **shuffle stage**: executor slots sat **idle doing shuffle I/O** while it ran,
+  instead of calling `add_record`.
+- Worse, it could **reduce** the partition count **below the input file count**, throttling
+  parallelism rather than raising it.
+- Cost-weighted, it was **~0.1% of batch wall time** — removing it **closed no throughput gap**. It
+  merely looked like a lever.
+
+The file source's own partitions now feed the executor slots directly, so read + `add_record`
+**fuse into one pipelined stage**. (Random partitioning of the *input* is still correct and
+required — see "Partitioning" below; what was removed is the redundant *per-micro-batch* reshuffle.)
+
+### 2. Rust consumer and Spark feeder are performance-EQUIVALENT
+Both call the **identical** engine `add_record` and, at steady state, run at the **same duty cycle**
+(~92% — nearly all engine threads active, the rest brief idle between records). The loader source
+does **not** change per-record engine cost.
+
+An earlier apparent Spark deficit did **not** reproduce under a controlled comparison. It was a
+**confounded measurement**: a concurrent, shared-database run with **mismatched engine (thread)
+counts** on each side and a **database that was still growing** during the window, compounded by a
+**~9% host-to-host hardware asymmetry**. None of that is attributable to the engine or the Spark
+harness — once the counts matched and the measure was duty cycle rather than wall clock, the two
+sources were indistinguishable.
+
+### 3. Methodology lesson: on a shared, growing DB, wall clock is not a measurable
+Throughput / wall-clock time is **not a reliable quantity** on a shared, still-growing database:
+the workload, cache state, and contention all move under you, and a per-host hardware asymmetry
+(here ~9%) can swamp the effect you are chasing. Use instead:
+
+- **Thread-state duty cycle** — the fraction of engine threads `active` vs `idle` — as the
+  steady-state throughput proxy.
+- **Invariant per-record counters** — SQL statements / rows / buffer accesses per record — which do
+  not depend on wall clock, cache warmth, or host speed.
+- **Cost-weight any mechanism before calling it a bottleneck.** The repartition *looked* like a
+  smoking gun; measured, it was 0.1% of wall time and moved nothing. A counter delta is only a
+  verdict once it is weighted by the contended resource's share of time.
+
+### 4. libpq version changes plugin CPU — `PQsetChunkedRowsMode` (libpq 17) vs libpq 16
+The Senzing PostgreSQL plugin (`libpostgresqlplugin.so`) references `PQsetChunkedRowsMode`, the
+libpq **17** chunked-rows retrieval API. libpq 17 exports that symbol; libpq **16 does not**. On an
+image whose plugin is loaded against libpq 16, the symbol resolves **weakly** and the plugin
+**falls back to non-chunked** row retrieval — it materializes and copies more per result set on the
+client side, so **plugin / libpq CPU rises** even though the engine, the SQL, and the record stream
+are identical.
+
+This is an **ENVIRONMENTAL** difference — *which libpq the container image links* — **not** the
+engine and **not** the harness. It has a direct A/B consequence:
+
+- To compare two loaders (or two builds) fairly, **both must link the same libpq**, ideally **17**.
+  Otherwise a libpq-16 image shows inflated plugin CPU that has nothing to do with the code under
+  test — the same confound class as a mismatched thread count or a host hardware asymmetry (finding
+  #2), just moved into the client library.
+- Pin and **record the libpq major version** of every image in a comparison, and prefer libpq 17 so
+  the chunked-rows path is actually taken. If an image must ship libpq 16, treat its plugin-CPU
+  figures as **not comparable** to a libpq-17 image's.
+
+**Measured (directional).** Rebuilding one image from libpq 16 → 17 with the *same* jar and workload,
+the PG-client CPU share fell ~9–10% relative — plugin-inclusive 14.1% → 12.7%, with libpq itself
+−15% self — consistent with the chunked-rows path doing less per-row client work. Caveat: a single
+short profiling window per arm (no `REPEATS>1`), so treat the magnitude as directional, not a precise
+delta; the direction held across captures.
 
 ## The performance model (standard Senzing)
 

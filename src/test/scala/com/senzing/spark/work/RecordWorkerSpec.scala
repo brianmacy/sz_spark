@@ -72,6 +72,39 @@ final class RecordWorkerSpec extends AnyFunSuite {
     assert(sr.requestJson == rec.payload && sr.resultJson == """{"RESOLVED_ENTITIES":[]}""")
   }
 
+  test("a record missing DATA_SOURCE dead-letters as BadInput WITHOUT calling the engine") {
+    val c = counters()
+    var engineCalls = 0
+    val w = worker(
+      WorkerOp.Add,
+      { _ => engineCalls += 1; """{"AFFECTED_ENTITIES":[{"ENTITY_ID":1}]}""" },
+      c
+    )
+    val rows = w.processOne(InputRecord("", "1001", """{"RECORD_ID":"1001"}"""))
+    assert(engineCalls == 0, "engine must not be called for a record missing DATA_SOURCE")
+    assert(rows.size == 1 && rows.head.kind == StagingKind.Error)
+    assert(StagingRow.toError(rows.head).category == "BAD_INPUT")
+    assert(c.errored == 1 && c.succeeded == 0)
+  }
+
+  test("a record missing RECORD_ID dead-letters as BadInput WITHOUT calling the engine") {
+    val c = counters()
+    var engineCalls = 0
+    val w = worker(WorkerOp.Add, { _ => engineCalls += 1; "{}" }, c)
+    val rows = w.processOne(InputRecord("TESTSRC", "", "{}"))
+    assert(engineCalls == 0, "engine must not be called for a record missing RECORD_ID")
+    assert(rows.size == 1 && rows.head.kind == StagingKind.Error)
+    assert(StagingRow.toError(rows.head).category == "BAD_INPUT")
+    assert(c.errored == 1)
+  }
+
+  test("search and redo verbs are exempt from the required-key check") {
+    val search = worker(WorkerOp.Search, _ => """{"RESOLVED_ENTITIES":[]}""")
+    assert(search.processOne(InputRecord("", "", """{"NAME_FULL":"x"}""")).size == 1)
+    val redo = worker(WorkerOp.Redo, _ => """{"AFFECTED_ENTITIES":[{"ENTITY_ID":9}]}""")
+    assert(redo.processOne(InputRecord("REDO", "", "<redo-json>")).size == 1)
+  }
+
   test("bad input routes to an error row and continues (never throws)") {
     val c = counters()
     val w = worker(WorkerOp.Add, _ => throw new SzBadInputException("bad"), c)

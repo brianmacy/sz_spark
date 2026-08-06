@@ -1,4 +1,4 @@
-package com.senzing.spark.jobs
+package com.senzing.spark.core
 
 /**
  * The single driver-side redo dequeuer. Pulls redo-record JSON via the injected `getRedoRecord`

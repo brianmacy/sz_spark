@@ -1,13 +1,11 @@
 package com.senzing.spark.glue
 
 import java.nio.charset.StandardCharsets
-import java.util.UUID
 
 import scala.collection.mutable.ArrayBuffer
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import org.apache.hadoop.fs.Path
-import org.apache.spark.sql.{SaveMode, SparkSession}
+import org.apache.spark.sql.SparkSession
 
 import com.rabbitmq.client.{Channel, ConnectionFactory}
 import com.senzing.spark.work.InputRecord
@@ -83,32 +81,17 @@ object MqToParquet {
   }
 
   /**
-   * Write the shard under a dot-prefixed staging dir `inbox/.tmp-<uuid>` (skipped by the feeder),
-   * then atomically rename its single `coalesce(1)` leaf to a flat `inbox/part-<uuid>.parquet` FILE
-   * — so both the batch and the streaming parquet readers see one whole file appear at once, never
-   * a half-written footer. The staging dir (its `_SUCCESS`/`.crc`) is then removed.
+   * Write the shard as a flat `inbox/part-<uuid>.parquet` FILE that appears atomically (stage under
+   * a dot-prefixed `inbox/.tmp-<uuid>` the feeder skips, then rename the single leaf out) — so both
+   * the batch and streaming parquet readers see one whole file at once, never a half-written
+   * footer. The atomic-rename mechanics live in [[ShardIo.writeSingleFile]]. A buffered batch is
+   * never empty (the caller returns 0 before calling this), so a `None` leaf is a hard error.
    */
   private def persistShard(spark: SparkSession, inbox: String, records: Seq[InputRecord]): Unit = {
     import spark.implicits._
-    val uuid = UUID.randomUUID().toString
-    val inboxPath = new Path(inbox)
-    val tmp = new Path(inboxPath, s".tmp-$uuid")
-    val fin = new Path(inboxPath, s"part-$uuid.parquet")
-    spark
-      .createDataset(records)
-      .coalesce(1) // exactly one leaf file per shard
-      .write
-      .mode(SaveMode.Overwrite)
-      .parquet(tmp.toString)
-    val fs = fin.getFileSystem(spark.sparkContext.hadoopConfiguration)
-    val leaf = fs
-      .listStatus(tmp)
-      .map(_.getPath)
-      .find(p => p.getName.endsWith(".parquet") && !p.getName.startsWith("."))
-      .getOrElse(throw new java.io.IOException(s"no parquet leaf written under $tmp"))
-    if (!fs.rename(leaf, fin)) // atomic appearance of the whole shard file
-      throw new java.io.IOException(s"atomic shard rename failed: $leaf -> $fin")
-    fs.delete(tmp, /*recursive=*/ true) // drop _SUCCESS/.crc staging remnants
+    ShardIo
+      .writeSingleFile(spark, spark.createDataset(records).toDF(), inbox, prefix = "part")
+      .getOrElse(throw new java.io.IOException(s"no parquet leaf written for shard under $inbox"))
   }
 
   def main(args: Array[String]): Unit = {

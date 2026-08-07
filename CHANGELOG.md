@@ -6,6 +6,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Source-agnostic overlapping-batch feeder** (`glue.ParquetParallelFeeder`) — the tail-killing
+  alternative to `glue.ParquetStreamFeeder`. Structured Streaming commits micro-batches strictly
+  sequentially, so every batch is exposed to a straggler idling the whole cluster (measured on `.142`:
+  76% idle mid-tail). The new engine keeps **K chunk-jobs in flight** under `spark.scheduler.mode=FAIR`
+  so a freed slot pulls the next partition from *any* in-flight chunk — a slow record holds exactly one
+  slot, never the cluster. New pieces: `glue.RecordSource` (the source seam: `nextChunk`/`commit`/
+  `reclaim` with two commit flavors — **dispose** for transactionally-ack'd MQ, **monotonic watermark**
+  for object-store-safe Kafka/Delta), `glue.InboxSource` (the RabbitMQ-via-drainer dispose adapter),
+  `glue.OverlappingBatchEngine` (K persistent worker threads, each claim→process→commit→loop), and
+  `glue.ShardIo` (atomic single-file sinks + shard claim/dispose/reclaim, now shared with `MqToParquet`).
+  **Operating point: `recordsPerBatch=1000` ⇒ one partition per batch, `maxUnprocessedBatches` ≥
+  `spark.cores.max`** — each batch commits independently so a huge-entity straggler parks 1 of K workers
+  and the rest keep cycling: no mid-stream tail, only genuine end-of-input. At-least-once / never-drop
+  (uncommitted chunks are reclaimed on restart); same `AddCore` and same dead-letter contract as the
+  streaming feeder. Record-based knobs only (`recordsPerBatch` / `maxUnprocessedBatches`) — no exposed
+  partition/concurrency counts. See [`docs/PARALLEL_BATCH_FEEDER.md`](docs/PARALLEL_BATCH_FEEDER.md).
+  Kafka/Delta watermark adapters + a throttled RabbitMQ→Kafka bridge are Step 2 (same seam).
 - **Dead-letter capture in the streaming feeder** (`glue.ParquetStreamFeeder`): each micro-batch's
   `SplitResult` is now persisted instead of discarded — the `errors` frame to a durable `deadLetter`
   dir (the on-prem DLQ) and the `good` frame to an append-only `output` change-feed, both
@@ -38,11 +55,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) §"Measured findings".
 
 ### Docs
-- `docs/PERFORMANCE.md`: new "Measured findings" section — loader-source A/B (Rust consumer vs Spark
-  feeder are equivalent at the same ~duty cycle; an earlier apparent deficit was a confounded
-  shared-DB measurement plus host asymmetry) and the repartition-removal rationale; plus the
-  methodology note that on a shared, growing DB throughput/wall-clock is not a measurable — use duty
-  cycle and invariant per-record counters, and cost-weight before calling anything a bottleneck.
+- **`docs/BUILD_AGAINST_FLEET_ENGINE.md`** (new) + `.claude/faqs/build/engine-build-parity.md` (new):
+  the mandatory engine-build-parity check. `sbt stageNatives` bakes whatever engine `SENZING_DIR`
+  holds into the FAT jar, silently; a stale `/opt/senzing` (`4.4.0.26151`) vs the fleet's
+  `4.4.0.DEVELOPMENT` was the dominant term in a ~20% apparent feeder deficit on 2026-08-07. Documents
+  the `apiVersion` (`get_stats`) parity check, the hybrid `SENZING_DIR` rebuild (DEV natives + matching
+  `sz-sdk.jar`, and the `UnsatisfiedLinkError` from mismatched jar/natives), and why the native-drift
+  gate cannot catch this.
+- `docs/PERFORMANCE.md`: finding #2 **corrected** — the apparent Spark deficit DID reproduce and its
+  root cause was the stale bundled engine (above), not the earlier confound hypothesis; rebuilding
+  against the fleet engine restored CPU/throughput parity. Methodology note gains "confirm same engine
+  build (and libpq major) FIRST." The rest of "Measured findings" (loader-source equivalence at matched
+  build, repartition-removal rationale, duty-cycle/invariant-counter methodology, libpq-17 chunked-rows)
+  stands.
+- `docs/PARALLEL_BATCH_FEEDER.md` (new): design of the source-agnostic overlapping-batch feeder — the
+  straggler-tail rationale, the partition-level work-stealing mechanism, the `RecordSource` seam and its
+  two commit flavors, correctness (at-least-once / concurrency-safe sinks), job args, the 1-partition
+  operating point, and the engine-build-parity caveat for A/B measurement.
 - New `docs/DEAD_LETTER.md`; `docs/RABBITMQ_INGEST.md` reconciled to the final feeder (no per-batch
   repartition, dead-letter/output sinks); `docs/JOB_LAYERING.md` gains the `glue` reprocess job and a
   `diag` row; README reflects the three features and indexes the new docs.

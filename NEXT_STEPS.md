@@ -1,41 +1,40 @@
 # Next Steps
 
-## ★ NEXT (2026-08-07) — PARALLEL-BATCH FEEDER (fix the Spark straggler tail)
+## ★ STEP 1 — PARALLEL-BATCH FEEDER — ✅ DONE (branch `bem_parallel_batch_feeder`, `87f699d`)
 
-The micro-batch **straggler tail** idles the cluster (measured `.142` 76% idle — a few huge-entity records stall the
-whole batch). Replace `ParquetStreamFeeder` with a source-agnostic **overlapping-batch** feeder: custom FAIR-scheduler
-driver, single reader, unbounded read-ahead — **NOT Structured Streaming** (SS is strictly sequential). **Full plan +
-locked decisions:** `~/.claude/plans/sz_spark_parallel_batch_feeder.md`.
-- **STEP 1 — RabbitMQ path:** new glue `ParquetParallelFeeder` over the parquet inbox (atomic-rename claim → `AddCore`
-  → dispose-on-completion → reclaim-orphans-on-restart); reuse the `MqToParquet` drainer (ack-on-persist) unchanged;
-  deploy on `.142` replacing `ParquetStreamFeeder`; measure the idle drop + tail-gone.
-- **STEP 2 — Kafka + bridge:** Kafka Source (offset cursor, `minPartitions` on ONE unpartitioned topic, monotonic
-  watermark) + a RabbitMQ→Kafka adapter throttled so the Spark consumer stays ≤ ~5M records behind.
+The micro-batch **straggler tail** idled the cluster (measured `.142` 76% idle). Replaced
+`ParquetStreamFeeder` with a source-agnostic **overlapping-batch** feeder (custom FAIR-scheduler driver,
+K worker threads, 1 partition/batch) — implemented, 102/102 unit tests, and deployed on `.142` against
+the live `g2` DB. The apparent ~20% deficit vs the Rust fleet was a **stale engine baked into the jar**,
+NOT the feeder — rebuilding against the fleet's `4.4.0.DEVELOPMENT` engine restored parity (CPU
+44%→55.5% ≈ Rust 57%). See `docs/PARALLEL_BATCH_FEEDER.md`, `docs/BUILD_AGAINST_FLEET_ENGINE.md`, and
+`STATUS.md`. Plan of record: `~/.claude/plans/sz_spark_parallel_batch_feeder.md`.
+
+## ★ NEXT — push this branch, then Step 2 (Kafka)
+
+1. **Push `bem_parallel_batch_feeder`** after user review of the changelist (feeder + docs/FAQ/CHANGELOG
+   updates this session). No PR exists yet; open one on push.
+2. **`.142`-Rust baseline** — run the Rust consumer on `.142` (same host) to remove the ~9% host-asymmetry
+   confound from the parity number (currently `.142`-Spark vs `.141`-Rust).
+3. **STEP 2 — Kafka + bridge:** `KafkaSource` (offset cursor, `minPartitions` fanning ONE unpartitioned
+   topic into N tasks, monotonic-watermark commit) + `DeltaSource` (version/CDF watermark) implementing
+   the same `RecordSource` seam, plus a RabbitMQ→Kafka adapter throttled so the Spark consumer stays
+   ≤ ~5M records behind. Same engine, same `AddCore` — only the source differs.
+4. **Collapse `SparkRecordOps` 3-jobs/batch** to a one-pass sink (minor; the DB-bound arm hides it today).
+
 Locked (don't re-litigate): overlapping-batches (NOT over-decomposition / NOT worker-pull); source seam
-`{nextChunk, read→DataFrame, commit}` with per-unit-dispose vs monotonic-watermark flavors; `engine.ConfigDrift` is
-the sole reinit (keep it).
+`{nextChunk, read→DataFrame, commit}` with per-unit-dispose vs monotonic-watermark flavors; `engine.ConfigDrift`
+is the sole reinit (keep it); 1 partition/batch + `maxUnprocessedBatches` ≥ `spark.cores.max`.
 
----
+## Streaming ingest — ✅ landed (PR #4 on `main`; kept for history)
 
-## Immediate (pre-merge) — ✅ DONE (PR #4 merged to `main` 2026-08-07); kept for history
-
-1. **User reviews and approves the current changelist** (branch `bem_rabbitmq_ingest`): dead-letter
-   capture + `DeadLetterReprocess`, the `diag.StatsPlugin` `getStats` sampler, the per-batch
-   repartition removal, and the accompanying docs.
-   - Run `git diff --stat` / `git status` for a full tree view.
-   - Nothing is staged; no destructive operations will run without explicit approval.
-   - ⚠ Before committing, decide on the customer-codename `DATA_SOURCE` literals in
-     `ParquetStreamFeederSpec.scala` — a codename in a committed test fixture. Replace with a neutral
-     value (e.g. `TEST_DS`) if it should not ship.
-
-## Streaming ingest (this branch)
-
-1a. **Build Stage 1 `RabbitMqSource`** — the plain-JVM MQ→parquet drainer (persist-then-ack) is
-    designed in `docs/RABBITMQ_INGEST.md` but not yet implemented; only the Stage 2 feeder exists.
+1a. **Stage 1 MQ→parquet drainer** (`glue.MqToParquet`, persist-then-ack) — DONE; running on `.142`.
+    `docs/RABBITMQ_INGEST.md` describes the two-stage path.
 
 1b. **Exercise the feeder end-to-end** on a cluster: dead-letter capture on real failures, then
     `DeadLetterReprocess` replay; confirm the `SZ_STATS` sampler lands one central stream in the
-    driver log with `--conf spark.plugins=com.senzing.spark.diag.StatsPlugin`.
+    driver log with `--conf spark.plugins=com.senzing.spark.diag.StatsPlugin`. (Streaming feeder done;
+    the parallel feeder now supersedes it — see the top block.)
 
 2. **Hash-pin CI actions** — ✅ DONE. `.github/workflows/ci.yml` SHA-pins the latest majors
    (`actions/checkout@…9c091bb # v7.0.0`, `actions/setup-java@…1bcf9fb # v5.4.0`,

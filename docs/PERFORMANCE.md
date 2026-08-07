@@ -35,17 +35,25 @@ The file source's own partitions now feed the executor slots directly, so read +
 **fuse into one pipelined stage**. (Random partitioning of the *input* is still correct and
 required — see "Partitioning" below; what was removed is the redundant *per-micro-batch* reshuffle.)
 
-### 2. Rust consumer and Spark feeder are performance-EQUIVALENT
-Both call the **identical** engine `add_record` and, at steady state, run at the **same duty cycle**
-(~92% — nearly all engine threads active, the rest brief idle between records). The loader source
-does **not** change per-record engine cost.
+### 2. Rust consumer and Spark feeder are performance-EQUIVALENT — **at matched engine build**
+Both call the **identical** engine `add_record` and, at the same engine build, run at the **same
+duty cycle** (~92% — nearly all engine threads active, the rest brief idle between records). The
+loader source does **not** change per-record engine cost.
 
-An earlier apparent Spark deficit did **not** reproduce under a controlled comparison. It was a
-**confounded measurement**: a concurrent, shared-database run with **mismatched engine (thread)
-counts** on each side and a **database that was still growing** during the window, compounded by a
-**~9% host-to-host hardware asymmetry**. None of that is attributable to the engine or the Spark
-harness — once the counts matched and the measure was duty cycle rather than wall clock, the two
-sources were indistinguishable.
+The subtlety that took a full day to find: an apparent ~20% Spark deficit **did reproduce**, and the
+first hypothesis — a confound of mismatched thread counts, a still-growing DB, and a ~9% host
+asymmetry — was **wrong** (or at most a minor term). The dominant cause was a **stale engine build
+bundled in the FAT jar**. `sbt stageNatives` bakes in whatever engine `$SENZING_DIR` (`/opt/senzing`)
+holds; that was `4.4.0.26151` (2026-05-31), while the Rust fleet ran `4.4.0.DEVELOPMENT` with newer
+DB-round-trip reductions. The older engine simply did more DB round-trips per record, so the Spark
+threads waited ~2× longer in `sqlExecuting` and host CPU sat idle. Rebuilding the jar against the
+**fleet's** engine closed the gap: `.142`-Spark host CPU **44% → 55.5% ≈ `.141`-Rust 57%**, total
+system add 1562 → 1732 rec/s. Only *then* are the two loaders indistinguishable.
+
+⚠ **Verify engine-build parity BEFORE trusting any loader A/B** — the feeder's runtime `apiVersion`
+(from `get_stats`) must equal the fleet's. See [`BUILD_AGAINST_FLEET_ENGINE.md`](BUILD_AGAINST_FLEET_ENGINE.md)
+for the check and the rebuild procedure, and `.claude/faqs/build/engine-build-parity.md` for why the
+native-drift gate does not catch this class of mismatch.
 
 ### 3. Methodology lesson: on a shared, growing DB, wall clock is not a measurable
 Throughput / wall-clock time is **not a reliable quantity** on a shared, still-growing database:
@@ -59,6 +67,9 @@ the workload, cache state, and contention all move under you, and a per-host har
 - **Cost-weight any mechanism before calling it a bottleneck.** The repartition *looked* like a
   smoking gun; measured, it was 0.1% of wall time and moved nothing. A counter delta is only a
   verdict once it is weighted by the contended resource's share of time.
+- **Confirm the two arms run the same engine build (and same libpq major) FIRST.** Finding #2 shows
+  a stale engine baked into one arm's jar can be the *dominant* term while masquerading as a harness
+  deficit. Check `apiVersion` (`get_stats`) parity before attributing any gap to the loader.
 
 ### 4. libpq version changes plugin CPU — `PQsetChunkedRowsMode` (libpq 17) vs libpq 16
 The Senzing PostgreSQL plugin (`libpostgresqlplugin.so`) references `PQsetChunkedRowsMode`, the

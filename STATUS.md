@@ -1,63 +1,77 @@
 # Project Status
 
-**Date:** 2026-08-06
-**Branch:** bem_rabbitmq_ingest
-**State:** the M0–M16 reference implementation is in place; this branch adds the **streaming ingest
-path** (parquet inbox → long-running feeder → engine) and, in the current uncommitted changelist,
-three features on top of it. Ask the user before committing.
+**Date:** 2026-08-07
+**Branch:** bem_parallel_batch_feeder (4 commits, not yet pushed / no PR)
+**State:** the M0–M16 reference implementation + streaming ingest path are on `main` (PR #4 merged
+2026-08-07). This branch adds the **source-agnostic overlapping-batch feeder** (Step 1, RabbitMQ path)
+that kills the micro-batch straggler tail. Implemented, unit-tested, and deployed on `.142`. Ask the
+user before pushing.
 
-## Current branch work (uncommitted changelist)
+## Current branch work (`bem_parallel_batch_feeder`)
 
-New assets + docs for the streaming feeder, pending review/commit:
+Commits (oldest → newest):
 
-| Feature | Components |
+| SHA | Summary |
 |---|---|
-| Dead-letter handling | `glue.ParquetStreamFeeder` now persists each batch's `SplitResult` — `errors` → durable `deadLetter` dir (DLQ), `good` → `output` change-feed, both `SaveMode.Append`, both opt-in; `glue.DeadLetterReprocess` replays the reprocessable categories. Tests in `ParquetStreamFeederSpec`. See `docs/DEAD_LETTER.md`. |
-| `getStats` sampler | `diag.StatsPlugin` (Spark `SparkPlugin`: executor + driver) + `diag.StatsSampler` — one sampler thread per executor JVM, reset-on-read `getStats()` on a cadence → driver log (`SZ_STATS`). Opt-in via `spark.plugins`. Adds non-building probes `SzEngineProvider.tryEngine()` / `EngineLifecycle.peek()`. Tests in `diag/`. |
-| Repartition removal | dropped the per-batch `repartition(N)` in `ParquetStreamFeeder.foreachBatch` (pure overhead, ~0.1% of wall, closed no gap). |
+| `05fe7af` | v1 overlapping-batch parallel feeder (had an over-decomposition regression) |
+| `ad13d47` | v2 source-agnostic overlapping-batch engine (fixes v1) |
+| `96b2b4b` | record-based knobs (`recordsPerBatch` / `maxUnprocessedBatches`) |
+| `87f699d` | **1-partition-per-batch operating point — the fix (no mid-stream tail)** |
 
-Measured findings captured in `docs/PERFORMANCE.md` §"Measured findings": the Rust consumer and Spark
-feeder are performance-equivalent at the same duty cycle; on a shared, growing DB use duty cycle +
-invariant per-record counters, not wall clock.
+New assets: `glue.RecordSource` (source seam), `glue.InboxSource` (RabbitMQ dispose adapter),
+`glue.OverlappingBatchEngine` (K persistent worker threads), `glue.ShardIo` (atomic sinks + claim/
+dispose/reclaim, shared with `MqToParquet`), `glue.ParquetParallelFeeder` (entry point), and
+`ParquetParallelFeederSpec` (8 tests incl. straggler-isolation via a filesystem-free `MemSource`).
+Uncommitted in the tree: `docs/BUILD_AGAINST_FLEET_ENGINE.md` (new) + the doc/FAQ/CHANGELOG updates
+made this session (see "Uncommitted state").
 
-The prior streaming-feeder scaffolding on this branch (`core/` + `glue/` split, `AddCore`,
-`ParquetStreamFeeder`, the RabbitMQ two-stage design) is already committed; see
-`docs/RABBITMQ_INGEST.md` and `docs/JOB_LAYERING.md`.
+**Operating point (locked):** `recordsPerBatch=1000` ⇒ one partition per batch, `maxUnprocessedBatches`
+≥ `spark.cores.max`. Each batch commits independently, so a huge-entity straggler parks exactly 1 of K
+workers and the rest keep cycling — no mid-stream tail, only genuine end-of-input. See
+`docs/PARALLEL_BATCH_FEEDER.md`.
 
-## What is complete (M0–M16 baseline)
+## ★ The engine-build-parity finding (2026-08-07)
 
-The full Senzing-on-Spark reference implementation was built end-to-end in this session (milestones M0–M16):
+The feeder measured ~20% slower than the native Rust fleet on the same DB. After ruling out host,
+executor topology, connections, network, and contention, the root cause was a **stale engine build
+baked into the FAT jar**: `sbt stageNatives` pulls the engine from `$SENZING_DIR` (`/opt/senzing`),
+which was `4.4.0.26151` (2026-05-31), while the fleet ran `4.4.0.DEVELOPMENT` with newer DB-round-trip
+reductions. Rebuilding the jar against the fleet's engine restored parity: `.142`-Spark host CPU
+44% → 55.5% ≈ `.141`-Rust 57%; total system add 1562 → 1732 rec/s. Captured in
+`docs/BUILD_AGAINST_FLEET_ENGINE.md`, `.claude/faqs/build/engine-build-parity.md`, and `PERFORMANCE.md`
+finding #2 (corrected). **Rule: verify the feeder's runtime `apiVersion` (`get_stats`) == the fleet's
+before trusting any loader A/B.**
 
-| Area | Components |
-|---|---|
-| Native self-extraction | `NativeBootstrap`, `NativeLibLoader`, `NativeStaging` (sbt task), patchelf `$ORIGIN` rpath patching, SHA-256-keyed extract dir, file-lock + `.ready` sentinel, shutdown cleanup |
-| Engine singleton | `SzEngineProvider` (create-once/destroy-at-JVM-shutdown), `SzEnvGuard` (one-env-per-process enforcement), `EngineLifecycle` (acquire/release liveness counter) |
-| Config drift | `ConfigDrift` — double-checked reinit under write lock, CAS throttle (~1/min), no reinit stacking; enables live config updates without job restart |
-| Record processing | `RecordWorker`, `SparkRecordOps` (single-pass + two-sink), `ErrorTaxonomy`, `Backoff`, `CircuitBreaker`, `ProgressLogger`, `InfoParser` |
-| Jobs | `AddUpdateJob`, `DeleteJob`, `SearchJob`, `RedoJob`, `InitJob` (separate one-time admin), `SchemaApplier` |
-| Diagnostics | `SelfCheck`, `DeleteProbe`, `ShowOutput` |
-| FAT jar | `stageNatives` sbt task, `patchelf` rpath rewrite, `sbt assembly` → 265 MB jar; `libSz.so` stripped before bundle |
-| Tests (unit) | 78 tests, 20 suites — all green (`sbt test`). Excludes integration tests (tagged `IntegrationTest`). |
-| Integration tests | `EngineIT` 5/5 on real PostgreSQL + SQLite via `./scripts/it-local.sh`; `FatJarIT` container self-extraction on `temurin:21-jre` with no `/opt/senzing` |
-| Docs | `docs/DESIGN.md`, `docs/IMPLEMENTATION_PLAN.md`, `docs/RUNBOOK.md`, `docs/DATABRICKS.md`; `docs/tutorials/` — 3 DRAFT deployment tutorials (spark-onprem, aws-emr, databricks) |
-| CI | `.github/workflows/ci.yml` — scalafmtCheckAll + sbt test on push/PR; third-party actions SHA-pinned to latest majors (checkout v7.0.0 `9c091bb`, setup-java v5.4.0 `1bcf9fb`, cache v6.1.0 `55cc834`) |
-| Dependabot | `.github/dependabot.yml` — weekly, github-actions only (no sbt support), 21-day cooldown |
-| FAQ MCP | `.claude/faqs/` — 7 categories, 18 entries; deployment category extended with `database-and-input-partitioning`, `executor-memory-sizing`, `redistribution`, and `tutorials` entries |
-| Integration test config | `EngineIT` and `scripts/it-local.sh` verified with `CONFIGPATH=/etc/opt/senzing` (not the default `/opt/senzing/er/resources`); self-extraction rewrite tested |
+## Fleet deployment (`.142`, operational — NOT part of this git push)
 
-## Known gaps (not blocking the first commit)
+`.142` runs the parallel feeder against the shared live `g2` PG18 DB via the DEV-engine image
+`brian/sz_spark:local-b6621d47-dev-pq17` (feeder + redo + drainer all on it; one clean redo loop).
+Deploy config lives on the NAS (`/public_data/perfscripts/sz_spark/env.sh`,
+`RECORDS_PER_BATCH=1000` / `MAX_UNPROCESSED_BATCHES=CORES_MAX+32` / `SHARD_RECORDS=1000`), not in this
+repo. The broader Sayari-load run state is tracked in the **dbperf_test** project's STATUS/NEXT_STEPS,
+not here.
 
-1. **True multi-JVM/multi-node cluster run** — all integration testing used `local[4]` or a single-node Docker Compose stack. Cluster-scale validation (multiple executor JVMs, Spark standalone or YARN/K8s) has not been done.
-2. **MSSQL and MySQL dialects** — `SchemaApplier` branches by dialect but only PostgreSQL DDL is exercised; MSSQL/MySQL paths are untested.
-3. **`reinitialize()` concurrency certification** — the MCP notes it does not explicitly certify `reinitialize()` is safe under concurrent verbs even with the read/write lock pattern. Needs Senzing confirmation before relying on it under heavy config churn.
+## Tests
 
-## CI actions pin status
+`sbt test` — 102 unit tests green (was 78 at M16; +dead-letter/StatsPlugin/parallel-feeder specs).
+Integration tests (`IntegrationTest`-tagged) require a real engine and are excluded from the unit gate.
 
-`.github/workflows/ci.yml` SHA-pins all three third-party actions to latest majors — no bare `@v` tags remain. Dependabot covers the `github-actions` ecosystem with a 21-day security cooldown.
+## Known gaps (not blocking this push)
+
+1. **Step 2 not built** — Kafka Source (offset watermark) + Delta Source + throttled RabbitMQ→Kafka
+   bridge. Same `RecordSource` seam, same `AddCore`; only the source differs.
+2. **`.142`-Rust baseline untested** — the parity measurement is `.142`-Spark vs `.141`-Rust, still
+   confounded by the ~9% host asymmetry. The clean baseline is Rust on `.142` (same host) — not run.
+3. **`SparkRecordOps` 3-jobs/batch** — collapse to one-pass sink (minor; DB-bound arm hides it).
+4. Pre-existing: multi-node cluster validation, MSSQL/MySQL DDL, `reinitialize()` concurrency cert.
 
 ## Uncommitted state
 
-The current changelist (dead-letter + reprocess, `StatsPlugin` sampler, repartition removal, and the
-accompanying docs) is **uncommitted**, pending review. Global project rule: **ask the user before
-committing**. Nothing is lost — git tracks all files and the user may review the full diff before
-approving the commit.
+This session's tree changes, pending review before the push:
+- `docs/BUILD_AGAINST_FLEET_ENGINE.md` (new), `.claude/faqs/build/engine-build-parity.md` (new)
+- `docs/PERFORMANCE.md` (finding #2 corrected + methodology note), `docs/PARALLEL_BATCH_FEEDER.md`
+  (A/B parity caveat), `CHANGELOG.md` (parallel-feeder feature + Docs entries)
+- `STATUS.md` + `NEXT_STEPS.md` (this handoff)
+
+Global rule: **ask the user before committing/pushing.** Nothing is lost — git tracks all files and
+the full diff is reviewable before approval.

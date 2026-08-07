@@ -94,6 +94,14 @@ Both feeders are DB-bound, so `.142` CPU idle is only a weak proxy. Judge on: en
 `ParquetParallelFeederSpec`), and DB-side resolved-row deltas. MQ ack rate reflects the drainer's persist
 rate, not ER throughput — do not judge on it.
 
+⚠ **Before any cross-loader A/B (feeder vs Rust consumer), verify engine-build parity first.** The FAT
+jar bundles whatever engine `SENZING_DIR` held at build time; a stale one silently ships an old engine
+and can be the *dominant* term in an apparent feeder deficit (this is exactly what a ~20% gap turned out
+to be on 2026-08-07 — a `4.4.0.26151` jar vs the fleet's `4.4.0.DEVELOPMENT`; parity was restored by
+rebuilding). Confirm the feeder's runtime `apiVersion` (`get_stats`) equals the fleet's — see
+[`BUILD_AGAINST_FLEET_ENGINE.md`](BUILD_AGAINST_FLEET_ENGINE.md) and [`PERFORMANCE.md`](PERFORMANCE.md)
+finding #2.
+
 ## Step 2
 `KafkaSource` (offset watermark, `minPartitions` fanning one unpartitioned topic into N tasks) and
 `DeltaSource` (version/CDF watermark) implementing the same seam, plus a throttled RabbitMQ→Kafka bridge

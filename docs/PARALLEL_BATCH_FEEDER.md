@@ -1,114 +1,88 @@
-# Design: overlapping-batch parallel feeder (`glue.ParquetParallelFeeder`)
+# Design: source-agnostic overlapping-batch feeder
 
-**Status:** Stage 2 **alternative** to [`ParquetStreamFeeder`](RABBITMQ_INGEST.md) — implemented +
-unit-tested (claim/dispose/reclaim, concurrency-safe sinks, no-drop-on-failure, and the
-no-head-of-line-block guarantee). Same parquet inbox, same [`AddCore`](../src/main/scala/com/senzing/spark/core/AddCore.scala),
-same dead-letter contract ([`DEAD_LETTER.md`](DEAD_LETTER.md)); it replaces **only** how shards are fed
-to the engine. Kept **alongside** the streaming feeder, not a replacement of it.
+**Status:** implemented + unit-tested (overlap / no-head-of-line-block, no-drop, per-chunk sinks, and
+the `InboxSource` claim/dispose/reclaim). The tail-killing alternative to
+[`ParquetStreamFeeder`](RABBITMQ_INGEST.md); same [`AddCore`](../src/main/scala/com/senzing/spark/core/AddCore.scala),
+same dead-letter contract ([`DEAD_LETTER.md`](DEAD_LETTER.md)). Entry point: `glue.ParquetParallelFeeder`.
 
-## Why — the micro-batch straggler tail
-Structured Streaming (`ParquetStreamFeeder`) commits micro-batches **strictly sequentially**: a batch
-finishes only when its **slowest** partition finishes, then the checkpoint advances and the next batch
-starts. A few huge-entity records in one shard therefore idle every other slot until they complete —
-measured on `.142` at **76% host idle, 37/168 engine threads active** mid-tail. Making shards smaller
-or more numerous only *shrinks* the tail; the per-batch barrier remains.
+## Why — the straggler tail is fundamental and unpredictable
+You can never know ahead of time which records are slow (a huge entity can take orders of magnitude
+longer). Structured Streaming commits micro-batches **strictly sequentially**, so a batch ends only
+when its slowest task does — every batch is exposed to a straggler idling the whole cluster (measured
+on `.142`: 76% idle, 37/168 engine threads active mid-tail). Shrinking batches only shrinks the tail;
+the barrier remains. So SS's **execution model** is disqualified (its sources — Auto Loader, Delta,
+Kafka — are fine, and reused below).
 
-## The fix — overlapping batches, no barrier
-Run **K driver threads**, each owning ONE shard end-to-end: **claim → read → `AddCore` → sinks →
-dispose**. A slow shard holds a single thread while the other K−1 keep claiming new shards, so a freed
-slot refills immediately. The only idle is genuine end-of-input. There is no batch barrier, so there is
-no tail.
+## The mechanism — partition-level work-stealing over overlapping chunks
+Keep **K chunk-jobs in flight** concurrently under `spark.scheduler.mode=FAIR`. A freed executor slot
+immediately pulls the next pending **partition** from *any* in-flight chunk, so a slow record holds
+exactly **one** slot while the rest keep flowing. Partition-level refill, not batch-level — the tail
+never idles the cluster. The per-chunk barrier only bites at true end-of-input.
 
-Each inbox shard is one parquet file ⇒ one Spark partition ⇒ one task ⇒ one core. So **K concurrent
-jobs fill K cores — set `concurrency` = the engine slot count** (168 on `.142`). `spark.scheduler.mode=FAIR`
-(set by the job) + a distinct scheduler pool per worker share the cluster fairly across the K jobs.
+Per chunk: `df.repartition(P)` (Spark bin-packs the tiny shards; this spreads them evenly across slots)
+→ **one** `AddCore.run` (amortizing its staging-write + sink read-backs over the whole chunk) → sinks
+once → commit. The driver does **metadata only** (claim/commit/reclaim + job submission); all record
+data rides Spark partitions to the executors.
 
-## Ownership without a lock (per-unit dispose)
-The parquet inbox files *are* the durable cursor, so no external coordination is needed — a filesystem
-atomic rename is the mutual exclusion:
+> This replaced a v1 that ran one `AddCore.run` per single 5000-record shard — ~3 Spark jobs *per file*
+> — which starved the executors (~4× regression: 166 rec/s, CPU *down*). The unit must be a multi-file
+> chunk so the fixed per-`AddCore` overhead amortizes; v1's mistake was a 1-file (degenerate 1-partition)
+> unit that pulled the data path onto the driver.
 
-| step | action |
-|---|---|
-| **claim** | `rename(inbox/part-X.parquet → processing/part-X.parquet)`. The rename is atomic; a losing racer / already-moved shard gets `false` and the caller tries the next. Serialized behind one `synchronized` claimer (the "single reader") that buffers a listing and refills from the inbox as it drains. |
-| **process** | read the one shard file → `AddCore.run(spark, ds, runId, staging/<unit>)` into a **per-unit** staging dir → `SplitResult(good, errors)`. |
-| **sinks** | write each unit's `errors`/`good` as their OWN atomically-renamed single files (`de-*.parquet` / `af-*.parquet`). |
-| **dispose** | archive the shard (rename into `archive/`) if `archive` is set, else delete it; then drop its staging dir. |
-| **reclaim** | on start, move any shard left in `processing/` (a prior run's in-flight work) back to the inbox **before** claiming. |
+## The source is anything — the seam and two commit flavors
+[`RecordSource`](../src/main/scala/com/senzing/spark/glue/RecordSource.scala): `nextChunk(cursor) →
+Chunk(bounds, df, nextCursor)`, `commit(bounds)`, `reclaim()`. The engine touches only this seam, so
+the parquet inbox is just one adapter. Transactionally-ack'd MQ (RabbitMQ/SQS) map naturally to the
+**dispose** flavor; everyone else's cursor-native sources map to the **watermark** flavor.
 
-### ⛔ Two concurrency hazards a naive port of `ParquetStreamFeeder` would hit
-1. **Shared staging clobber.** [`SparkRecordOps.run`](../src/main/scala/com/senzing/spark/core/SparkRecordOps.scala)
-   writes its engine pass to `stagingPath` with `SaveMode.Overwrite`. K concurrent jobs sharing one
-   staging path would overwrite each other. ⇒ **per-unit staging** `staging/<unit>` (`<unit>` = the
-   shard's `part-<uuid>` basename).
-2. **Append committer race.** `ParquetStreamFeeder.writeSinks` uses `SaveMode.Append`; concurrent Append
-   jobs race on the `_temporary`/`_SUCCESS` commit protocol. ⇒ each unit writes its sinks as **unique
-   single files via atomic rename** ([`ShardIo.writeSingleFile`](../src/main/scala/com/senzing/spark/glue/ShardIo.scala)),
-   never Append. The dead-letter/output dirs stay flat collections of parquet files (the same shape the
-   drainer produces for the inbox), so the row schema — and therefore
-   [`DeadLetterReprocess`](../src/main/scala/com/senzing/spark/glue/DeadLetterReprocess.scala) and the
-   downstream dedup keys — are **unchanged**.
+| Source | Cursor | commit flavor | Portable? |
+|---|---|---|---|
+| **InboxSource** (RabbitMQ via the drainer) | none | **dispose** — claim `inbox→processing/<id>/` (atomic rename), archive/delete on commit, reclaim moves in-flight back to inbox | **on-prem only** — rename is copy+delete & non-atomic on S3/ADLS/GCS |
+| Kafka *(Step 2)* | offset | **monotonic watermark** — commit the contiguous-completed offset | object-store-safe (Databricks-native) |
+| Delta *(Step 2)* | table version / CDF | **monotonic watermark** — commit the version | object-store-safe (Databricks-native) |
 
-## Correctness / semantics
-- **At-least-once, never drop.** A shard whose processing **throws** is left in `processing/` and
-  reclaimed + reprocessed on the next restart. Re-adding an already-resolved record is a fast optimized
-  no-op (idempotent `addRecord` on `DATA_SOURCE,RECORD_ID`), so replay is cheap. A crash between
-  add-committed and dispose ⇒ the shard is reclaimed and re-added (no-op). No shard is lost.
-  - *(A transient failure waits for a restart to retry, rather than looping in-process — this keeps a
-    poison shard from hot-looping. In-process retry with backoff is a possible refinement.)*
-- **Engine concurrency** is the existing per-executor-JVM singleton under the read lock (write lock only
-  for config-drift reinit) — K concurrent tasks share it exactly as the streaming feeder's within-batch
-  partitions already do.
-- **Memory-bounded:** at most K × `shardRecords` records in flight (a fixed thread pool); references are
-  dropped per unit.
-- **Random shard order only** — never partitioned by a resolution key (a resolution-key grouping causes
-  lock contention). Shards are claimed in listing order; their *contents* are whatever the drainer wrote.
+The dispose flavor is the reason v1's design was awkward for a Databricks user (rename isn't atomic on
+cloud object storage); the watermark flavor fixes it and is how the same engine runs as a Databricks
+**Job** against Kafka/Delta. On Databricks the low-latency serving of results is DBR-proprietary
+(Auto Loader / DLT / online tables) and stays glue-only; the engine + seam are portable.
+
+## Correctness
+- **At-least-once, never-drop:** a chunk whose processing throws is **not** committed → the source
+  reclaims it on restart (dispose) or it is re-read from the last committed cursor (watermark). Re-adding
+  a resolved record is a fast optimized no-op.
+- **Concurrency-safe sinks:** each chunk writes its error/good frames as their own atomically-renamed
+  single files (`de-*.parquet` / `af-*.parquet`) — never `Append` (which races the commit protocol
+  across concurrent jobs). Row schema is identical to `ParquetStreamFeeder`'s, so `DeadLetterReprocess`
+  and downstream dedup are unchanged.
+- **Per-chunk staging:** `AddCore.run` writes `staging/<bounds>` (a shared path would clobber under
+  concurrency); cleaned after commit.
+- **Memory-bounded:** ≤ K chunks × `filesPerChunk` records in flight; references dropped per chunk.
 
 ## Job args (`glue.ParquetParallelFeeder`)
 | Arg | Meaning | Default |
 |---|---|---|
-| `inbox` | parquet shard dir (claim source) | — |
-| `processing` | dir shards are claimed into while in flight (reclaimed on restart) | — |
-| `archive` | if set, disposed shards are moved here; empty ⇒ deleted | `""` (delete) |
-| `staging` | base dir for per-unit `AddCore` staging (`staging/<unit>`) | `staging` |
-| `deadLetter` | durable **DLQ dir** for each unit's `errors` frame (empty ⇒ no write) | `""` |
-| `output` | append-only affected-entity **change-feed dir** for the `good` frame (empty ⇒ no write) | `""` |
-| `concurrency` | K worker threads = concurrent shards in flight; set ≈ engine slot count | `32` |
-| `trigger` | `default` (long-running, poll forever) or `availableNow` (drain then exit) | `default` |
+| `source` | `inbox` (kafka/delta are Step 2) | `inbox` |
+| `inbox` / `processing` | inbox dir / in-flight claim dir (source=inbox) | — |
+| `archive` | disposed shards moved here; empty ⇒ deleted | `""` |
+| `filesPerChunk` | **B** — shards per chunk (≈ 1M records at 5000/shard) | `200` |
+| `staging` | base for per-chunk `AddCore` staging (`staging/<bounds>`) | `staging` |
+| `deadLetter` / `output` | DLQ dir / affected-entity change-feed dir (empty ⇒ skip) | `""` |
+| `concurrency` | **K** — chunks in flight (bounds "incomplete batches") | `4` |
+| `partitionsPerChunk` | **P** — repartition width per chunk | `64` |
+| `trigger` | `default` (long-running) or `availableNow` (drain then exit) | `default` |
 | `emptyMs` | idle window before `availableNow` exits | `30000` |
 | `runId` | ties affected-entity rows to a run | `run` |
 
-`inbox`, `processing`, `archive`, `staging`, and the sink dirs must all live on storage reachable by the
-drainer and every Spark node (a shared volume) — same constraint as the streaming feeder.
-
-## Launch (replacing the streaming feeder on the same inbox)
-```bash
-spark-submit --class com.senzing.spark.glue.ParquetParallelFeeder \
-  --conf spark.scheduler.mode=FAIR \
-  sz-spark-assembly.jar \
-  inbox=/data/tmp/sz_spark_io/inbox \
-  processing=/data/tmp/sz_spark_io/processing \
-  archive=/data/tmp/sz_spark_io/archive \
-  staging=/data/tmp/sz_spark_io/staging \
-  deadLetter=/data/tmp/sz_spark_io/deadletter \
-  output=/data/tmp/sz_spark_io/affected \
-  concurrency=168 trigger=default runId=sayari
-```
-The [Stage-1 drainer](RABBITMQ_INGEST.md) (`MqToParquet`, ack-on-persist) is **unchanged** — it remains
-the RabbitMQ→inbox adapter. Only Stage 2 changes.
+Sizing intuition: K×P pending partitions should comfortably exceed the executor slot count so freed
+slots always have work; B large enough that the per-chunk `AddCore` overhead is negligible per record.
 
 ## Measuring the win (see [`PERFORMANCE.md`](PERFORMANCE.md))
-MQ ack rate reflects the drainer's persist rate, not ER throughput — do **not** judge on it. Judge on:
-- **`.142` host idle%** (target: 76% → low) and **engine-thread duty cycle** (should stay high with no
-  tail dips), grounded against the run log;
-- a deliberately slow shard must **not** idle the other slots (the tail-gone property — asserted in
-  `ParquetParallelFeederSpec`);
-- DB-side resolved-row deltas for completion.
+Both feeders are DB-bound, so `.142` CPU idle is only a weak proxy. Judge on: engine-thread duty cycle
+(should stay high, no periodic tail dips), a deliberately-slow shard NOT idling other slots (asserted in
+`ParquetParallelFeederSpec`), and DB-side resolved-row deltas. MQ ack rate reflects the drainer's persist
+rate, not ER throughput — do not judge on it.
 
-Wall-clock / throughput is noisy on a shared, growing DB, so the verdict is idle% + duty cycle + tail
-behavior, not a raw rec/s delta.
-
-## What Step 2 adds (not in this doc)
-A **source seam** so the same overlapping-batch driver runs over Kafka (offset cursor, monotonic
-watermark commit) and Delta (version cursor), plus a throttled RabbitMQ→Kafka bridge. The per-unit
-dispose flavor here is one of two commit flavors; Kafka/Delta use the watermark flavor. Kept out of
-Step 1 to land the working RabbitMQ path first.
+## Step 2
+`KafkaSource` (offset watermark, `minPartitions` fanning one unpartitioned topic into N tasks) and
+`DeltaSource` (version/CDF watermark) implementing the same seam, plus a throttled RabbitMQ→Kafka bridge
+(cap the Spark consumer's lag). Same engine, same `AddCore` — only the source differs.

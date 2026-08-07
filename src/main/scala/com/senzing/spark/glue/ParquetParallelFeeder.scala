@@ -15,10 +15,14 @@ import com.senzing.spark.jobs.SparkJob
  * [[OverlappingBatchEngine]].
  *
  * Args: `source` (default `inbox`; kafka/delta are Step 2), `runId`; inbox source: `inbox`,
- * `processing`, `archive` (opt), `recordsPerShard` (drainer shard size, 5000); engine: `staging`,
- * `deadLetter` (opt), `output` (opt), `recordsPerBatch` (100000), `maxUnprocessedBatches` (10),
- * `trigger` (`default`|`availableNow`), `emptyMs` (30000). The engine derives the partition width
- * from `recordsPerBatch` — the user does NOT set a partition or concurrency count directly.
+ * `processing`, `archive` (opt), `recordsPerShard` (drainer shard size, 1000); engine: `staging`,
+ * `deadLetter` (opt), `output` (opt), `recordsPerBatch` (1000), `maxUnprocessedBatches` (200),
+ * `trigger` (`default`|`availableNow`), `emptyMs` (30000).
+ *
+ * DEFAULT OPERATING POINT: `recordsPerBatch=1000` ⇒ ONE partition/batch (independent commit,
+ * straggler = one slot) and `maxUnprocessedBatches=200` ≈ slot count + buffer (so a straggler costs
+ * 1 of 200 workers). Set `maxUnprocessedBatches` ≥ the cluster's `spark.cores.max`. See
+ * [[OverlappingBatchEngine]] for why this is the tail-free point.
  */
 object ParquetParallelFeeder extends SparkJob {
 
@@ -41,7 +45,7 @@ object ParquetParallelFeeder extends SparkJob {
           processing,
           m.getOrElse("archive", ""),
           recordsPerBatch = recordsPerBatch,
-          recordsPerShard = m.getOrElse("recordsPerShard", "5000").toInt
+          recordsPerShard = m.getOrElse("recordsPerShard", "1000").toInt
         )
       case other =>
         throw new IllegalArgumentException(
@@ -52,7 +56,7 @@ object ParquetParallelFeeder extends SparkJob {
   def main(args: Array[String]): Unit = {
     val m = GlueArgs.parse(args)
     val runId = m.getOrElse("runId", "run")
-    val recordsPerBatch = m.getOrElse("recordsPerBatch", "100000").toInt
+    val recordsPerBatch = m.getOrElse("recordsPerBatch", "1000").toInt
     val spark = buildSession(
       "sz-parallel-batch-feeder",
       extraConf = Map("spark.scheduler.mode" -> "FAIR")
@@ -67,7 +71,7 @@ object ParquetParallelFeeder extends SparkJob {
         deadLetter = m.getOrElse("deadLetter", ""),
         output = m.getOrElse("output", ""),
         recordsPerBatch = recordsPerBatch,
-        maxUnprocessedBatches = m.getOrElse("maxUnprocessedBatches", "10").toInt,
+        maxUnprocessedBatches = m.getOrElse("maxUnprocessedBatches", "200").toInt,
         trigger = m.getOrElse("trigger", "default"),
         emptyMs = m.getOrElse("emptyMs", "30000").toLong
       )

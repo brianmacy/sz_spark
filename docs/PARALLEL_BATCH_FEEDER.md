@@ -64,21 +64,24 @@ cloud object storage); the watermark flavor fixes it and is how the same engine 
 | `source` | `inbox` (kafka/delta are Step 2) | `inbox` |
 | `inbox` / `processing` | inbox dir / in-flight claim dir (source=inbox) | — |
 | `archive` | disposed shards moved here; empty ⇒ deleted | `""` |
-| `recordsPerBatch` | records per batch (the engine derives the partition width from this) | `100000` |
-| `maxUnprocessedBatches` | batches in flight — bounds "incomplete batches" | `10` |
-| `recordsPerShard` | drainer shard size, so the inbox adapter maps records→files (source=inbox) | `5000` |
+| `recordsPerBatch` | records per batch; `1000` ⇒ **one partition/batch** (independent commit, straggler = 1 slot) | `1000` |
+| `maxUnprocessedBatches` | worker threads = batches in flight; set **≥ `spark.cores.max`** so a straggler costs 1 of K | `200` |
+| `recordsPerShard` | drainer shard size, so the inbox adapter maps records→files (source=inbox) | `1000` |
 | `staging` | base for per-batch `AddCore` staging (`staging/<bounds>`) | `staging` |
 | `deadLetter` / `output` | DLQ dir / affected-entity change-feed dir (empty ⇒ skip) | `""` |
 | `trigger` | `default` (long-running) or `availableNow` (drain then exit) | `default` |
 | `emptyMs` | idle window before `availableNow` exits | `30000` |
 | `runId` | ties affected-entity rows to a run | `run` |
 
-**Record-based knobs, not file/partition counts.** The user sets `recordsPerBatch` +
-`maxUnprocessedBatches`; the engine derives the partition width (`recordsPerBatch / ~5000`) — "the
-system partitions each batch any way it wants." `maxUnprocessedBatches × (recordsPerBatch/5000)`
-pending partitions should exceed the slot count so freed slots always have work; smaller
-`recordsPerBatch` = batches commit sooner (tighter restart/dispose bound). Records are the
-source-agnostic unit (Kafka/Delta think in offsets/versions, not files).
+**Operating point — 1 partition per batch, K ≈ slot count (Rust-consumer emulation).** With
+`recordsPerBatch=1000` each batch is a single task that commits on its own, so a huge-entity
+straggler holds exactly **one** worker/slot and the other K-1 workers keep cycling fresh batches —
+**no mid-stream tail**, the only idle is genuine end-of-input. Set `maxUnprocessedBatches` ≥
+`spark.cores.max` (a straggler then costs 1 of K). This is the closest Spark gets to the Rust
+consumer's per-thread pull. ⛔ The stall to avoid: FEW workers (K≈10) or MULTI-partition batches make
+a worker wait for a batch's slowest partition, so a few stragglers park all workers and the cluster
+starves (observed on `.142`). Records are the source-agnostic unit (Kafka/Delta use offsets/versions,
+not files). ⚠ Validate throughput in a controlled/dedicated-DB arm — the shared live DB confounds it.
 
 > Measured on `.142` (2026-08-07): with all feeder designs the engine slots stay **full** (`active:12/12`
 > per executor) but ~80% are `sqlExecuting` — this arm is **DB-round-trip-bound**, so throughput and

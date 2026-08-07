@@ -23,7 +23,7 @@ import com.senzing.spark.work.{ErrorCategory, InputRecord}
  */
 object ParquetParallelFeederSpec {
   val rowCount = new AtomicLong(0)
-  val overlapLatch = new CountDownLatch(2) // the two fast chunks in the overlap test
+  val overlapLatch = new CountDownLatch(6) // the six fast chunks in the no-stall test
   @volatile var slowSawLatchZero = false
 
   /**
@@ -150,7 +150,7 @@ final class ParquetParallelFeederSpec extends AnyFunSuite with BeforeAndAfterAll
       stagingBase = tmp("staging").getAbsolutePath,
       deadLetter = deadLetter,
       output = output,
-      recordsPerBatch = 10000, // => 2 partitions/batch (TargetRecordsPerPartition=5000)
+      recordsPerBatch = 1000, // => 1 partition/batch (the production operating point; no shuffle)
       maxUnprocessedBatches = maxUnprocessedBatches,
       trigger = "availableNow",
       emptyMs = 500L
@@ -208,17 +208,18 @@ final class ParquetParallelFeederSpec extends AnyFunSuite with BeforeAndAfterAll
     )
   }
 
-  test("engine overlap: a slow chunk does not head-of-line-block the fast ones (concurrency=2)") {
+  test("no-stall: a straggler blocks only its own worker while the others keep cycling batches") {
+    // K=3 workers, 1 straggler + 6 fast batches (> K). The straggler parks ONE worker; the other two
+    // must churn all 6 fast batches (which release the straggler's latch). Proves a straggler costs
+    // one worker/slot, not the pool — the property that failed at K=10 with multi-partition batches.
     slowSawLatchZero = false
-    val src = new MemSource(
-      spark,
-      Seq("slow" -> Seq(rec("slow")), "f1" -> Seq(rec("fast-1")), "f2" -> Seq(rec("fast-2")))
-    )
-    val stats = runEngine(src, overlapProcess, maxUnprocessedBatches = 2)
-    assert(stats.processedChunks == 3L, s"all three chunks committed, was ${stats.processedChunks}")
+    val chunks = ("slow" -> Seq(rec("slow"))) +: (1 to 6).map(i => s"f$i" -> Seq(rec(s"fast-$i")))
+    val src = new MemSource(spark, chunks)
+    val stats = runEngine(src, overlapProcess, maxUnprocessedBatches = 3)
+    assert(stats.processedChunks == 7L, s"all 7 chunks committed, was ${stats.processedChunks}")
     assert(
       slowSawLatchZero,
-      "the fast chunks ran WHILE the slow chunk blocked (no head-of-line block)"
+      "the 6 fast batches committed on 2 workers WHILE the straggler parked the 3rd (no stall)"
     )
   }
 

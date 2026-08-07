@@ -14,20 +14,29 @@ import com.senzing.spark.work.InputRecord
 /**
  * Source-agnostic OVERLAPPING-BATCH engine — the tail-killing execution model. The straggler tail
  * is fundamental and unpredictable (you can never know which records are slow), so a per-batch
- * barrier (Structured Streaming) always risks one straggler idling the cluster. This engine instead
- * keeps K chunk-jobs in flight concurrently under `spark.scheduler.mode=FAIR`, so a freed executor
- * slot immediately pulls the next pending PARTITION from ANY in-flight chunk — a slow record then
- * holds exactly ONE slot while the rest keep flowing. Partition-level work-stealing, not
- * batch-level.
+ * barrier (Structured Streaming) always risks one straggler idling the cluster.
+ *
+ * OPERATING POINT (Rust-consumer emulation): run K persistent worker threads, K ≈ the executor slot
+ * count, each looping claim → process(ONE-partition batch) → commit → claim-next. With **one
+ * partition per batch** a batch commits exactly when its single task finishes, so a straggler
+ * blocks only its own worker/slot; the other K-1 workers keep cycling fresh batches. A straggler
+ * therefore costs exactly ONE slot (never the batch, never the cluster) — the only idle is genuine
+ * end-of-input. Contrast the failure mode: FEW workers (K≈10) OR MULTI-partition batches make a
+ * worker wait for a batch's slowest partition, so a handful of stragglers park all workers and the
+ * cluster starves. Size batches small enough to isolate a straggler to one slot (~1k records) yet
+ * large enough that per-batch overhead is negligible vs the engine time (at ~4 rec/s/thread a 1k
+ * batch runs ~250s, so the ~1s of plumbing is ~0.4%).
+ *
+ * (Larger `recordsPerBatch` ⇒ >1 partition/batch; the engine then repartitions and a freed slot
+ * pulls the next pending PARTITION from any in-flight chunk — still overlap, but a multi-partition
+ * batch reintroduces a per-batch barrier, so prefer the 1-partition point above.)
  *
  * It touches ONLY the [[RecordSource]] seam, so the source can be anything (inbox / Kafka / Delta);
  * the driver does metadata (claim/commit/reclaim) + job submission, and ALL record data rides Spark
  * partitions to the executors.
  *
- * Per chunk: `df.repartition(P)` (Spark bin-packs tiny shards, this spreads them evenly across
- * slots) → ONE `process` pass (`AddCore.run`, amortizing its staging-write + sink read-backs over
- * the whole chunk, NOT per file — the fix for the v1 over-decomposition regression) → sinks once →
- * `commit`.
+ * Per chunk: read → (repartition only when P>1) → ONE `process` pass (`AddCore.run`) → sinks once →
+ * `commit`. At the 1-partition operating point there is no shuffle and the chunk is a single task.
  *
  * At-least-once, never-drop: a chunk whose processing THROWS is NOT committed, so the source
  * reclaims it on the next restart (dispose flavor) or it is re-read from the last committed cursor
@@ -102,7 +111,9 @@ object OverlappingBatchEngine {
     def processOne(chunk: Chunk): Unit = {
       val staging = new Path(stagingBase, sanitize(chunk.bounds)).toString
       try {
-        val df = chunk.df.repartition(partitionsPerChunk)
+        // 1 partition (the default operating point) ⇒ NO repartition/shuffle: the batch is a single
+        // task that commits on its own, so a straggler holds exactly one slot and blocks nothing.
+        val df = if (partitionsPerChunk > 1) chunk.df.repartition(partitionsPerChunk) else chunk.df
         val result = process(df, staging)
         // Per-chunk single-file sinks (unique names) — concurrency-safe, unlike Append.
         if (deadLetter.nonEmpty) ShardIo.writeSingleFile(spark, result.errors, deadLetter, "de")

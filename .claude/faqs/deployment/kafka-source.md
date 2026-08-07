@@ -58,8 +58,20 @@ spark-submit --class com.senzing.spark.glue.ParquetParallelFeeder \
 - End-to-end against a live broker is an `IntegrationTest` (tagged, excluded from `sbt test`), like
   `EngineIT` — it needs a real Kafka.
 
-## Not yet built (rest of Step 2)
+## The rest of Step 2 (also built)
 
-- **RabbitMQ→Kafka bridge:** read RabbitMQ → produce to the topic, throttled so the Spark consumer
-  stays ≤ ~5M records behind (`latestOffset − committedOffset` cap). Kafka is the durable buffer.
-- **`DeltaSource`:** Delta table version / CDF watermark — the same seam, cleanest on Databricks.
+- **RabbitMQ→Kafka bridge** (`glue.MqToKafka`) — plain-JVM competing consumer, the RabbitMQ→Kafka
+  analog of `MqToParquet`. Moves records from the queue onto the topic, **throttled** so the Spark
+  consumer stays ≤ `maxLag` (default 5M) records behind: `lag = latestKafkaOffset − committedOffset`
+  (committed offset read from the SAME checkpoint the feeder writes); pauses draining while
+  `lag ≥ maxLag`. **Produce-THEN-ack** write-ahead (crash between ⇒ RabbitMQ redelivers ⇒ duplicate ⇒
+  idempotent `add_record` absorbs). `kafka-clients` is BUNDLED so the bridge runs from the FAT jar with
+  no `--packages`. Args: `amqpUrl` / `queue` / `bootstrapServers` / `topic` / `checkpoint` / `maxLag` /
+  `batchRecords`.
+- **`glue.DeltaSource`** — Delta table version / CDF watermark; same `OffsetWatermark`. Prereqs: CDF
+  enabled (`delta.enableChangeDataFeed=true`) + a STRING `value` column with the JSON body. ⚠
+  **version-granular, not row-count-granular** — a large commit is one batch; prefer Kafka for the
+  tightest tail-freeness. `delta-spark` is Provided (present on Databricks / `--packages
+  io.delta:delta-spark_2.13:4.0.0`).
+- **`glue.KafkaSourceIT`** — broker end-to-end, tagged `IntegrationTest`; run with `SZ_IT=1
+  SZ_KAFKA_BOOTSTRAP=<broker>`.

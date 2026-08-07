@@ -1,6 +1,23 @@
 # Next Steps
 
-## Immediate (pre-merge)
+## ★ NEXT (2026-08-07) — PARALLEL-BATCH FEEDER (fix the Spark straggler tail)
+
+The micro-batch **straggler tail** idles the cluster (measured `.142` 76% idle — a few huge-entity records stall the
+whole batch). Replace `ParquetStreamFeeder` with a source-agnostic **overlapping-batch** feeder: custom FAIR-scheduler
+driver, single reader, unbounded read-ahead — **NOT Structured Streaming** (SS is strictly sequential). **Full plan +
+locked decisions:** `~/.claude/plans/sz_spark_parallel_batch_feeder.md`.
+- **STEP 1 — RabbitMQ path:** new glue `ParquetParallelFeeder` over the parquet inbox (atomic-rename claim → `AddCore`
+  → dispose-on-completion → reclaim-orphans-on-restart); reuse the `MqToParquet` drainer (ack-on-persist) unchanged;
+  deploy on `.142` replacing `ParquetStreamFeeder`; measure the idle drop + tail-gone.
+- **STEP 2 — Kafka + bridge:** Kafka Source (offset cursor, `minPartitions` on ONE unpartitioned topic, monotonic
+  watermark) + a RabbitMQ→Kafka adapter throttled so the Spark consumer stays ≤ ~5M records behind.
+Locked (don't re-litigate): overlapping-batches (NOT over-decomposition / NOT worker-pull); source seam
+`{nextChunk, read→DataFrame, commit}` with per-unit-dispose vs monotonic-watermark flavors; `engine.ConfigDrift` is
+the sole reinit (keep it).
+
+---
+
+## Immediate (pre-merge) — ✅ DONE (PR #4 merged to `main` 2026-08-07); kept for history
 
 1. **User reviews and approves the current changelist** (branch `bem_rabbitmq_ingest`): dead-letter
    capture + `DeadLetterReprocess`, the `diag.StatsPlugin` `getStats` sampler, the per-batch

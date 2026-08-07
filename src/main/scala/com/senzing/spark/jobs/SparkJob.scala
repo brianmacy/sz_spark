@@ -9,12 +9,17 @@ import org.apache.spark.sql.{Dataset, SparkSession}
  */
 trait SparkJob {
 
-  def buildSession(appName: String, master: Option[String] = None): SparkSession = {
+  def buildSession(
+      appName: String,
+      master: Option[String] = None,
+      extraConf: Map[String, String] = Map.empty
+  ): SparkSession = {
     val b = SparkSession
       .builder()
       .appName(appName)
       .config("spark.speculation", "false")
     master.foreach(b.master)
+    extraConf.foreach { case (k, v) => b.config(k, v) }
     b.getOrCreate()
   }
 

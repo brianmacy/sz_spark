@@ -139,7 +139,7 @@ final class ParquetParallelFeederSpec extends AnyFunSuite with BeforeAndAfterAll
   private def runEngine(
       source: RecordSource,
       process: (Dataset[InputRecord], String) => SplitResult,
-      concurrency: Int = 2,
+      maxUnprocessedBatches: Int = 2,
       deadLetter: String = "",
       output: String = ""
   ): OverlappingBatchEngine.Stats =
@@ -150,8 +150,8 @@ final class ParquetParallelFeederSpec extends AnyFunSuite with BeforeAndAfterAll
       stagingBase = tmp("staging").getAbsolutePath,
       deadLetter = deadLetter,
       output = output,
-      concurrency = concurrency,
-      partitionsPerChunk = 2,
+      recordsPerBatch = 10000, // => 2 partitions/batch (TargetRecordsPerPartition=5000)
+      maxUnprocessedBatches = maxUnprocessedBatches,
       trigger = "availableNow",
       emptyMs = 500L
     )
@@ -164,7 +164,7 @@ final class ParquetParallelFeederSpec extends AnyFunSuite with BeforeAndAfterAll
       Seq("c1" -> Seq(rec("a"), rec("b")), "c2" -> Seq(rec("c")), "c3" -> Seq(rec("d")))
     )
     rowCount.set(0)
-    val stats = runEngine(src, countingProcess, concurrency = 3)
+    val stats = runEngine(src, countingProcess, maxUnprocessedBatches = 3)
     assert(stats.processedChunks == 3L, s"all 3 chunks processed, was ${stats.processedChunks}")
     assert(rowCount.get() == 4L, s"all 4 rows fed once, was ${rowCount.get()}")
     assert(src.committed.size() == 3, s"every chunk committed, was ${src.committed.size()}")
@@ -192,7 +192,7 @@ final class ParquetParallelFeederSpec extends AnyFunSuite with BeforeAndAfterAll
       spark,
       Seq("boom" -> Seq(rec("boom")), "ok1" -> Seq(rec("x")), "ok2" -> Seq(rec("y")))
     )
-    val stats = runEngine(src, failProcess, concurrency = 2)
+    val stats = runEngine(src, failProcess, maxUnprocessedBatches = 2)
     assert(stats.failedChunks == 1L, s"the boom chunk failed, was ${stats.failedChunks}")
     assert(
       stats.processedChunks == 2L,
@@ -214,7 +214,7 @@ final class ParquetParallelFeederSpec extends AnyFunSuite with BeforeAndAfterAll
       spark,
       Seq("slow" -> Seq(rec("slow")), "f1" -> Seq(rec("fast-1")), "f2" -> Seq(rec("fast-2")))
     )
-    val stats = runEngine(src, overlapProcess, concurrency = 2)
+    val stats = runEngine(src, overlapProcess, maxUnprocessedBatches = 2)
     assert(stats.processedChunks == 3L, s"all three chunks committed, was ${stats.processedChunks}")
     assert(
       slowSawLatchZero,
@@ -231,13 +231,16 @@ final class ParquetParallelFeederSpec extends AnyFunSuite with BeforeAndAfterAll
   ): (InboxSource, File, File) = {
     val inbox = new File(base, "inbox"); inbox.mkdirs()
     val processing = new File(base, "processing")
+    // recordsPerShard=1 ⇒ recordsPerBatch == filesPerChunk, so the source claims exactly
+    // `filesPerChunk` shard files per chunk (keeps the test's file-count intent).
     (
       new InboxSource(
         spark,
         inbox.getAbsolutePath,
         processing.getAbsolutePath,
         archive,
-        filesPerChunk
+        recordsPerBatch = filesPerChunk,
+        recordsPerShard = 1
       ),
       inbox,
       processing

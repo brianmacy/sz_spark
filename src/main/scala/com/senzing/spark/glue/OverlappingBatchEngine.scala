@@ -40,6 +40,12 @@ object OverlappingBatchEngine {
 
   private val IdlePauseMs = 200L
 
+  /**
+   * The system's own partition sizing: ~this many records per partition (the user sets
+   * `recordsPerBatch`, not a partition count — the engine derives the width).
+   */
+  private val TargetRecordsPerPartition = 5000
+
   // scalastyle:off println
   private def log(msg: String): Unit = println(s"[OverlappingBatchEngine] $msg")
   private def logErr(msg: String): Unit =
@@ -58,13 +64,22 @@ object OverlappingBatchEngine {
       stagingBase: String,
       deadLetter: String,
       output: String,
-      concurrency: Int,
-      partitionsPerChunk: Int,
+      recordsPerBatch: Int,
+      maxUnprocessedBatches: Int,
       trigger: String,
       emptyMs: Long
   ): Stats = {
-    require(concurrency > 0, s"concurrency must be > 0, was $concurrency")
-    require(partitionsPerChunk > 0, s"partitionsPerChunk must be > 0, was $partitionsPerChunk")
+    require(recordsPerBatch > 0, s"recordsPerBatch must be > 0, was $recordsPerBatch")
+    require(
+      maxUnprocessedBatches > 0,
+      s"maxUnprocessedBatches must be > 0, was $maxUnprocessedBatches"
+    )
+
+    // The user sets records-per-batch + how many batches may be in flight; the engine derives the
+    // partition width (the system "partitions each batch any way it wants"). K batches × P partitions
+    // is the pending-partition pool a freed slot steals from.
+    val concurrency = maxUnprocessedBatches
+    val partitionsPerChunk = math.max(1, recordsPerBatch / TargetRecordsPerPartition)
 
     source.reclaim()
 
@@ -121,7 +136,8 @@ object OverlappingBatchEngine {
     }
 
     log(
-      s"starting: concurrency=$concurrency partitionsPerChunk=$partitionsPerChunk trigger=$trigger"
+      s"starting: recordsPerBatch=$recordsPerBatch maxUnprocessedBatches=$maxUnprocessedBatches " +
+        s"(=> $partitionsPerChunk partitions/batch, ${maxUnprocessedBatches * partitionsPerChunk} pending) trigger=$trigger"
     )
     val pool = Executors.newFixedThreadPool(concurrency)
     try {

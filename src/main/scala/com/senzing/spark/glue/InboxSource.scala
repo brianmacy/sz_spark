@@ -29,10 +29,17 @@ final class InboxSource(
     inbox: String,
     processing: String,
     archive: String,
-    filesPerChunk: Int
+    recordsPerBatch: Int,
+    recordsPerShard: Int
 ) extends RecordSource {
 
-  require(filesPerChunk > 0, s"filesPerChunk must be > 0, was $filesPerChunk")
+  require(recordsPerBatch > 0, s"recordsPerBatch must be > 0, was $recordsPerBatch")
+  require(recordsPerShard > 0, s"recordsPerShard must be > 0, was $recordsPerShard")
+
+  // The inbox is file-based (the drainer writes ~recordsPerShard-record shards); translate the
+  // records-per-batch target into a shard count. Keeps the ENGINE/knob API record-based.
+  private val filesPerChunk: Int =
+    math.max(1, math.ceil(recordsPerBatch.toDouble / recordsPerShard).toInt)
 
   private val fs: FileSystem = ShardIo.fileSystem(spark, inbox)
   private val inboxPath = new Path(inbox)

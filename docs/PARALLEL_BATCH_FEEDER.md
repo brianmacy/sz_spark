@@ -64,17 +64,26 @@ cloud object storage); the watermark flavor fixes it and is how the same engine 
 | `source` | `inbox` (kafka/delta are Step 2) | `inbox` |
 | `inbox` / `processing` | inbox dir / in-flight claim dir (source=inbox) | — |
 | `archive` | disposed shards moved here; empty ⇒ deleted | `""` |
-| `filesPerChunk` | **B** — shards per chunk (≈ 1M records at 5000/shard) | `200` |
-| `staging` | base for per-chunk `AddCore` staging (`staging/<bounds>`) | `staging` |
+| `recordsPerBatch` | records per batch (the engine derives the partition width from this) | `100000` |
+| `maxUnprocessedBatches` | batches in flight — bounds "incomplete batches" | `10` |
+| `recordsPerShard` | drainer shard size, so the inbox adapter maps records→files (source=inbox) | `5000` |
+| `staging` | base for per-batch `AddCore` staging (`staging/<bounds>`) | `staging` |
 | `deadLetter` / `output` | DLQ dir / affected-entity change-feed dir (empty ⇒ skip) | `""` |
-| `concurrency` | **K** — chunks in flight (bounds "incomplete batches") | `4` |
-| `partitionsPerChunk` | **P** — repartition width per chunk | `64` |
 | `trigger` | `default` (long-running) or `availableNow` (drain then exit) | `default` |
 | `emptyMs` | idle window before `availableNow` exits | `30000` |
 | `runId` | ties affected-entity rows to a run | `run` |
 
-Sizing intuition: K×P pending partitions should comfortably exceed the executor slot count so freed
-slots always have work; B large enough that the per-chunk `AddCore` overhead is negligible per record.
+**Record-based knobs, not file/partition counts.** The user sets `recordsPerBatch` +
+`maxUnprocessedBatches`; the engine derives the partition width (`recordsPerBatch / ~5000`) — "the
+system partitions each batch any way it wants." `maxUnprocessedBatches × (recordsPerBatch/5000)`
+pending partitions should exceed the slot count so freed slots always have work; smaller
+`recordsPerBatch` = batches commit sooner (tighter restart/dispose bound). Records are the
+source-agnostic unit (Kafka/Delta think in offsets/versions, not files).
+
+> Measured on `.142` (2026-08-07): with all feeder designs the engine slots stay **full** (`active:12/12`
+> per executor) but ~80% are `sqlExecuting` — this arm is **DB-round-trip-bound**, so throughput and
+> host CPU are set by the DB, not by feeder tuning. The overlapping engine's job is to guarantee the
+> slots never idle on a straggler tail; it cannot raise a DB-bound ceiling.
 
 ## Measuring the win (see [`PERFORMANCE.md`](PERFORMANCE.md))
 Both feeders are DB-bound, so `.142` CPU idle is only a weak proxy. Judge on: engine-thread duty cycle

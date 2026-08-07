@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Kafka source for the parallel-batch feeder** (`glue.KafkaSource`, Step 2) — the watermark-flavor
+  `RecordSource` counterpart to the on-prem `InboxSource`, object-store-safe / Databricks-native. Same
+  `OverlappingBatchEngine`, only the source differs (`source=kafka`). Design (locked): **ONE
+  unpartitioned topic** — read parallelism is `minPartitions` fanning the single partition into N tasks,
+  never Kafka partitions, so records are not grouped by a resolution key. `nextChunk` claims a
+  **count-bounded** `[cursor, min(cursor+recordsPerBatch, latest))` range (a large lag becomes many small
+  1-partition batches, not one straggler-prone giant one); `commit` advances the new `glue.OffsetWatermark`
+  over the **contiguous-completed prefix** — required because the engine's K workers commit out of order —
+  persisting a double-buffered checkpoint (`offset-<topic>-0` + `.bak`); `reclaim` is a no-op (restart
+  re-reads the committed offset, replay = cheap no-op re-add). The `spark-sql-kafka-0-10` connector is
+  `Provided` (supply at launch via `--packages`). Args: `bootstrapServers` / `topic` / `checkpoint` /
+  `startingOffset` (cold-start only) / `minPartitions`. Unit-tested: `OffsetWatermarkSpec` (out-of-order,
+  gap, idempotency, durability, restart — real local FS) + `KafkaSourceSpec` (count-bounding, bounds
+  round-trip); broker end-to-end is an `IntegrationTest`. Remaining Step 2: a throttled RabbitMQ→Kafka
+  bridge (≤ ~5M-record lag cap) and a `DeltaSource`. See [`docs/PARALLEL_BATCH_FEEDER.md`](docs/PARALLEL_BATCH_FEEDER.md) §Step 2.
 - **Source-agnostic overlapping-batch feeder** (`glue.ParquetParallelFeeder`) — the tail-killing
   alternative to `glue.ParquetStreamFeeder`. Structured Streaming commits micro-batches strictly
   sequentially, so every batch is exposed to a straggler idling the whole cluster (measured on `.142`:

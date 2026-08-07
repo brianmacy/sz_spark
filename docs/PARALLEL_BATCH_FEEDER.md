@@ -38,8 +38,8 @@ the parquet inbox is just one adapter. Transactionally-ack'd MQ (RabbitMQ/SQS) m
 | Source | Cursor | commit flavor | Portable? |
 |---|---|---|---|
 | **InboxSource** (RabbitMQ via the drainer) | none | **dispose** — claim `inbox→processing/<id>/` (atomic rename), archive/delete on commit, reclaim moves in-flight back to inbox | **on-prem only** — rename is copy+delete & non-atomic on S3/ADLS/GCS |
-| Kafka *(Step 2)* | offset | **monotonic watermark** — commit the contiguous-completed offset | object-store-safe (Databricks-native) |
-| Delta *(Step 2)* | table version / CDF | **monotonic watermark** — commit the version | object-store-safe (Databricks-native) |
+| **KafkaSource** (built) | offset | **monotonic watermark** — [`OffsetWatermark`](../src/main/scala/com/senzing/spark/glue/OffsetWatermark.scala) commits the contiguous-completed offset; `reclaim` is a no-op (restart re-reads the committed offset) | object-store-safe (Databricks-native) |
+| Delta *(future)* | table version / CDF | **monotonic watermark** — commit the version | object-store-safe (Databricks-native) |
 
 The dispose flavor is the reason v1's design was awkward for a Databricks user (rename isn't atomic on
 cloud object storage); the watermark flavor fixes it and is how the same engine runs as a Databricks
@@ -61,9 +61,13 @@ cloud object storage); the watermark flavor fixes it and is how the same engine 
 ## Job args (`glue.ParquetParallelFeeder`)
 | Arg | Meaning | Default |
 |---|---|---|
-| `source` | `inbox` (kafka/delta are Step 2) | `inbox` |
+| `source` | `inbox` or `kafka` | `inbox` |
 | `inbox` / `processing` | inbox dir / in-flight claim dir (source=inbox) | — |
 | `archive` | disposed shards moved here; empty ⇒ deleted | `""` |
+| `bootstrapServers` / `topic` | Kafka brokers / topic (source=kafka) | — |
+| `checkpoint` | durable committed-offset dir (source=kafka) | — |
+| `startingOffset` | `earliest`\|`latest`\|`<number>` — **cold start only** (checkpoint governs after) | `earliest` |
+| `minPartitions` | Kafka read fan-out of the one topic into N tasks (source=kafka) | `1` |
 | `recordsPerBatch` | records per batch; `1000` ⇒ **one partition/batch** (independent commit, straggler = 1 slot) | `1000` |
 | `maxUnprocessedBatches` | worker threads = batches in flight; set **≥ `spark.cores.max`** so a straggler costs 1 of K | `200` |
 | `recordsPerShard` | drainer shard size, so the inbox adapter maps records→files (source=inbox) | `1000` |
@@ -102,7 +106,29 @@ rebuilding). Confirm the feeder's runtime `apiVersion` (`get_stats`) equals the 
 [`BUILD_AGAINST_FLEET_ENGINE.md`](BUILD_AGAINST_FLEET_ENGINE.md) and [`PERFORMANCE.md`](PERFORMANCE.md)
 finding #2.
 
-## Step 2
-`KafkaSource` (offset watermark, `minPartitions` fanning one unpartitioned topic into N tasks) and
-`DeltaSource` (version/CDF watermark) implementing the same seam, plus a throttled RabbitMQ→Kafka bridge
-(cap the Spark consumer's lag). Same engine, same `AddCore` — only the source differs.
+## Step 2 — Kafka (built), then the bridge + Delta
+
+**`KafkaSource` is built** ([`KafkaSource.scala`](../src/main/scala/com/senzing/spark/glue/KafkaSource.scala))
+— the watermark-flavor seam over **ONE unpartitioned topic** (partition 0). Read parallelism comes from
+`minPartitions` fanning that single partition into N tasks, **not** from Kafka partitions — so records
+are never grouped by a resolution key (which would create the cross-key entity-lock contention the
+project avoids). `nextChunk` claims `[cursor, min(cursor+recordsPerBatch, latest))` — a **count-bounded**
+range, so a large lag becomes many small 1-partition batches, never one straggler-prone giant batch —
+and `commit` advances [`OffsetWatermark`](../src/main/scala/com/senzing/spark/glue/OffsetWatermark.scala)
+over the **contiguous-completed prefix**. Because the engine's K workers commit out of order, the
+watermark holds a completed-but-behind-a-gap range until the gap fills, then sweeps forward and persists
+(double-buffered `checkpoint/offset-<topic>-0` + `.bak`). A restart re-reads from the committed offset;
+the replayed tail is a handful of cheap optimized no-op re-adds (at-least-once). `reclaim` is a no-op.
+
+- **Launch:** `source=kafka bootstrapServers=… topic=… checkpoint=<durable dir> [startingOffset=earliest|latest|<n>] [minPartitions=1]`.
+  The `spark-sql-kafka-0-10` connector is `Provided` — add it at submit with
+  `--packages org.apache.spark:spark-sql-kafka-0-10_2.13:<sparkVersion>` (present on Databricks).
+- **Correctness:** `OffsetWatermark`'s out-of-order/gap/idempotency/restart invariants are unit-tested
+  (`OffsetWatermarkSpec`, real local FS); the count-bounding + bounds round-trip in `KafkaSourceSpec`.
+  Broker end-to-end is an `IntegrationTest` (needs a live Kafka), like `EngineIT`.
+
+**Remaining:**
+- **RabbitMQ→Kafka bridge** — read RabbitMQ → produce to the Kafka topic, **throttled so the Spark
+  consumer stays ≤ ~5M records behind** (cap `latestOffset − committedOffset`). The RabbitMQ→Kafka analog
+  of the drainer→parquet seam, with Kafka as the durable buffer.
+- **`DeltaSource`** — Delta table version / CDF watermark (the same seam; cleanest Databricks-native path).

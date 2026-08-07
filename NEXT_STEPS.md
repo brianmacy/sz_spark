@@ -1,30 +1,36 @@
 # Next Steps
 
-## ★ STEP 1 — PARALLEL-BATCH FEEDER — ✅ DONE (branch `bem_parallel_batch_feeder`, `87f699d`)
+## ★ STEP 1 — PARALLEL-BATCH FEEDER — ✅ DONE + MERGED (PR #5 on `main`)
 
-The micro-batch **straggler tail** idled the cluster (measured `.142` 76% idle). Replaced
-`ParquetStreamFeeder` with a source-agnostic **overlapping-batch** feeder (custom FAIR-scheduler driver,
-K worker threads, 1 partition/batch) — implemented, 102/102 unit tests, and deployed on `.142` against
-the live `g2` DB. The apparent ~20% deficit vs the Rust fleet was a **stale engine baked into the jar**,
-NOT the feeder — rebuilding against the fleet's `4.4.0.DEVELOPMENT` engine restored parity (CPU
-44%→55.5% ≈ Rust 57%). See `docs/PARALLEL_BATCH_FEEDER.md`, `docs/BUILD_AGAINST_FLEET_ENGINE.md`, and
-`STATUS.md`. Plan of record: `~/.claude/plans/sz_spark_parallel_batch_feeder.md`.
+Source-agnostic **overlapping-batch** feeder (custom FAIR-scheduler driver, K worker threads, 1
+partition/batch) replaced `ParquetStreamFeeder` — 102/102 tests, deployed on `.142`. The apparent ~20%
+deficit vs the Rust fleet was a **stale engine baked into the jar**, NOT the feeder — rebuilding against
+the fleet's `4.4.0.DEVELOPMENT` engine restored parity (CPU 44%→55.5% ≈ Rust 57%). See
+`docs/PARALLEL_BATCH_FEEDER.md`, `docs/BUILD_AGAINST_FLEET_ENGINE.md`.
 
-## ★ NEXT — monitor PR #5, then Step 2 (Kafka)
+## ★ STEP 2(a) — KAFKA SOURCE — ✅ DONE (branch `bem_kafka_source`, pending push)
 
-1. **Monitor PR #5 CI / await review** — `bem_parallel_batch_feeder` is pushed and PR #5 is open against
-   `main` (feeder code + docs/FAQ/CHANGELOG). Watch `gh pr checks 5`; merge on green + approval.
-2. **`.142`-Rust baseline** — run the Rust consumer on `.142` (same host) to remove the ~9% host-asymmetry
-   confound from the parity number (currently `.142`-Spark vs `.141`-Rust).
-3. **STEP 2 — Kafka + bridge:** `KafkaSource` (offset cursor, `minPartitions` fanning ONE unpartitioned
-   topic into N tasks, monotonic-watermark commit) + `DeltaSource` (version/CDF watermark) implementing
-   the same `RecordSource` seam, plus a RabbitMQ→Kafka adapter throttled so the Spark consumer stays
-   ≤ ~5M records behind. Same engine, same `AddCore` — only the source differs.
-4. **Collapse `SparkRecordOps` 3-jobs/batch** to a one-pass sink (minor; the DB-bound arm hides it today).
+`glue.KafkaSource` (watermark seam) + `glue.OffsetWatermark` (contiguous-completed-prefix, durable) +
+`source=kafka` wiring + `spark-sql-kafka-0-10` (Provided). ONE unpartitioned topic, `minPartitions`
+fan-out, count-bounded batches. 115/115 unit tests. See `docs/PARALLEL_BATCH_FEEDER.md` §Step 2 and
+`.claude/faqs/deployment/kafka-source.md`.
+
+## ★ NEXT — push `bem_kafka_source`, then finish Step 2
+
+1. **Push `bem_kafka_source` + open a PR** after user review of the changelist (KafkaSource + OffsetWatermark
+   + specs + docs/FAQ/CHANGELOG). Watch `gh pr checks`; merge on green + approval.
+2. **STEP 2(b) — RabbitMQ→Kafka bridge:** read RabbitMQ → produce to the Kafka topic, **throttled so the
+   Spark consumer stays ≤ ~5M records behind** (`latestOffset − committedOffset` cap). Kafka as the
+   durable buffer (the RabbitMQ→Kafka analog of the drainer→parquet seam).
+3. **STEP 2(c) — `DeltaSource`:** Delta table version / CDF watermark implementing the same seam.
+4. **Broker end-to-end IntegrationTest** for `KafkaSource` (produce → feed → verify), like `FatJarIT`.
+5. **`.142`-Rust baseline** — run the Rust consumer on `.142` (same host) to remove the ~9% host-asymmetry
+   confound from the parity number. **Collapse `SparkRecordOps` 3-jobs/batch** to a one-pass sink.
 
 Locked (don't re-litigate): overlapping-batches (NOT over-decomposition / NOT worker-pull); source seam
 `{nextChunk, read→DataFrame, commit}` with per-unit-dispose vs monotonic-watermark flavors; `engine.ConfigDrift`
-is the sole reinit (keep it); 1 partition/batch + `maxUnprocessedBatches` ≥ `spark.cores.max`.
+is the sole reinit (keep it); 1 partition/batch + `maxUnprocessedBatches` ≥ `spark.cores.max`; Kafka =
+ONE unpartitioned topic + `minPartitions` (never partition by a resolution key).
 
 ## Streaming ingest — ✅ landed (PR #4 on `main`; kept for history)
 

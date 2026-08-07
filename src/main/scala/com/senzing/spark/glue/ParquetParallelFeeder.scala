@@ -1,5 +1,7 @@
 package com.senzing.spark.glue
 
+import org.apache.hadoop.fs.Path
+
 import com.senzing.spark.core.AddCore
 import com.senzing.spark.jobs.SparkJob
 
@@ -14,10 +16,12 @@ import com.senzing.spark.jobs.SparkJob
  * (~4x regression). v2 hands Spark multi-file chunks and lets partitions carry the data; see
  * [[OverlappingBatchEngine]].
  *
- * Args: `source` (default `inbox`; kafka/delta are Step 2), `runId`; inbox source: `inbox`,
- * `processing`, `archive` (opt), `recordsPerShard` (drainer shard size, 1000); engine: `staging`,
- * `deadLetter` (opt), `output` (opt), `recordsPerBatch` (1000), `maxUnprocessedBatches` (200),
- * `trigger` (`default`|`availableNow`), `emptyMs` (30000).
+ * Args: `source` (default `inbox`; also `kafka`), `runId`; inbox source: `inbox`, `processing`,
+ * `archive` (opt), `recordsPerShard` (drainer shard size, 1000); kafka source: `bootstrapServers`,
+ * `topic`, `checkpoint` (durable offset dir), `startingOffset` (`earliest`|`latest`|<number>, cold
+ * start only), `minPartitions` (read fan-out, 1); engine: `staging`, `deadLetter` (opt), `output`
+ * (opt), `recordsPerBatch` (1000), `maxUnprocessedBatches` (200), `trigger`
+ * (`default`|`availableNow`), `emptyMs` (30000).
  *
  * DEFAULT OPERATING POINT: `recordsPerBatch=1000` ⇒ ONE partition/batch (independent commit,
  * straggler = one slot) and `maxUnprocessedBatches=200` ≈ slot count + buffer (so a straggler costs
@@ -47,9 +51,37 @@ object ParquetParallelFeeder extends SparkJob {
           recordsPerBatch = recordsPerBatch,
           recordsPerShard = m.getOrElse("recordsPerShard", "1000").toInt
         )
+      case "kafka" =>
+        val bootstrap = m.getOrElse("bootstrapServers", "")
+        val topic = m.getOrElse("topic", "")
+        val checkpoint = m.getOrElse("checkpoint", "")
+        require(
+          bootstrap.nonEmpty && topic.nonEmpty && checkpoint.nonEmpty,
+          "bootstrapServers=, topic=, and checkpoint= are required for source=kafka"
+        )
+        val partition = KafkaSource.SinglePartition
+        // `startingOffset` (earliest|latest|<number>) is used ONLY on a cold start (no checkpoint);
+        // thereafter the durable committed offset governs where reading resumes.
+        val start = KafkaSource.resolveStart(
+          bootstrap,
+          topic,
+          partition,
+          m.getOrElse("startingOffset", "earliest")
+        )
+        val cpFile = new Path(checkpoint, s"offset-$topic-$partition")
+        val watermark =
+          new OffsetWatermark(ShardIo.fileSystem(spark, checkpoint), cpFile, start)
+        new KafkaSource(
+          spark,
+          bootstrap,
+          topic,
+          watermark,
+          recordsPerBatch = recordsPerBatch,
+          minPartitions = m.getOrElse("minPartitions", "1").toInt
+        )
       case other =>
         throw new IllegalArgumentException(
-          s"unknown source=$other (only 'inbox' is built; kafka/delta are Step 2)"
+          s"unknown source=$other (built: 'inbox', 'kafka'; 'delta' is a future adapter)"
         )
     }
 

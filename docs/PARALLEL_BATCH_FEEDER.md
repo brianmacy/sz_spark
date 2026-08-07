@@ -39,7 +39,7 @@ the parquet inbox is just one adapter. Transactionally-ack'd MQ (RabbitMQ/SQS) m
 |---|---|---|---|
 | **InboxSource** (RabbitMQ via the drainer) | none | **dispose** — claim `inbox→processing/<id>/` (atomic rename), archive/delete on commit, reclaim moves in-flight back to inbox | **on-prem only** — rename is copy+delete & non-atomic on S3/ADLS/GCS |
 | **KafkaSource** (built) | offset | **monotonic watermark** — [`OffsetWatermark`](../src/main/scala/com/senzing/spark/glue/OffsetWatermark.scala) commits the contiguous-completed offset; `reclaim` is a no-op (restart re-reads the committed offset) | object-store-safe (Databricks-native) |
-| Delta *(future)* | table version / CDF | **monotonic watermark** — commit the version | object-store-safe (Databricks-native) |
+| **DeltaSource** (built) | table version / CDF | **monotonic watermark** — same `OffsetWatermark` (version as cursor); `reclaim` is a no-op. ⚠ version-granular, not row-count-granular | object-store-safe (Databricks-native) |
 
 The dispose flavor is the reason v1's design was awkward for a Databricks user (rename isn't atomic on
 cloud object storage); the watermark flavor fixes it and is how the same engine runs as a Databricks
@@ -68,6 +68,9 @@ cloud object storage); the watermark flavor fixes it and is how the same engine 
 | `checkpoint` | durable committed-offset dir (source=kafka) | — |
 | `startingOffset` | `earliest`\|`latest`\|`<number>` — **cold start only** (checkpoint governs after) | `earliest` |
 | `minPartitions` | Kafka read fan-out of the one topic into N tasks (source=kafka) | `1` |
+| `tablePath` | Delta table path (source=delta) | — |
+| `startingVersion` | `latest`\|`<number>` — **cold start only** (source=delta) | `0` |
+| `versionsPerBatch` | Delta versions per batch (source=delta) | `1` |
 | `recordsPerBatch` | records per batch; `1000` ⇒ **one partition/batch** (independent commit, straggler = 1 slot) | `1000` |
 | `maxUnprocessedBatches` | worker threads = batches in flight; set **≥ `spark.cores.max`** so a straggler costs 1 of K | `200` |
 | `recordsPerShard` | drainer shard size, so the inbox adapter maps records→files (source=inbox) | `1000` |
@@ -106,7 +109,7 @@ rebuilding). Confirm the feeder's runtime `apiVersion` (`get_stats`) equals the 
 [`BUILD_AGAINST_FLEET_ENGINE.md`](BUILD_AGAINST_FLEET_ENGINE.md) and [`PERFORMANCE.md`](PERFORMANCE.md)
 finding #2.
 
-## Step 2 — Kafka (built), then the bridge + Delta
+## Step 2 — Kafka source, RabbitMQ→Kafka bridge, and Delta source (all built)
 
 **`KafkaSource` is built** ([`KafkaSource.scala`](../src/main/scala/com/senzing/spark/glue/KafkaSource.scala))
 — the watermark-flavor seam over **ONE unpartitioned topic** (partition 0). Read parallelism comes from
@@ -127,8 +130,24 @@ the replayed tail is a handful of cheap optimized no-op re-adds (at-least-once).
   (`OffsetWatermarkSpec`, real local FS); the count-bounding + bounds round-trip in `KafkaSourceSpec`.
   Broker end-to-end is an `IntegrationTest` (needs a live Kafka), like `EngineIT`.
 
-**Remaining:**
-- **RabbitMQ→Kafka bridge** — read RabbitMQ → produce to the Kafka topic, **throttled so the Spark
-  consumer stays ≤ ~5M records behind** (cap `latestOffset − committedOffset`). The RabbitMQ→Kafka analog
-  of the drainer→parquet seam, with Kafka as the durable buffer.
-- **`DeltaSource`** — Delta table version / CDF watermark (the same seam; cleanest Databricks-native path).
+**The RabbitMQ→Kafka bridge is built** ([`MqToKafka.scala`](../src/main/scala/com/senzing/spark/glue/MqToKafka.scala))
+— a plain-JVM competing consumer (the RabbitMQ→Kafka analog of the [`MqToParquet`] drainer) that moves
+records from the queue onto the topic, **throttled so the Spark consumer stays ≤ `maxLag` (default 5M)
+records behind**: `lag = latestKafkaOffset − committedOffset` (the committed offset read from the SAME
+checkpoint the feeder writes), and while `lag ≥ maxLag` it pauses draining — Kafka retention + this cap
+replace unbounded queue growth. Same write-ahead invariant as the parquet drainer: **produce-THEN-ack**
+(a crash between → RabbitMQ redelivers → duplicate Kafka record → idempotent `add_record` absorbs it).
+Args: `amqpUrl` / `queue` / `bootstrapServers` / `topic` / `checkpoint` / `maxLag` / `batchRecords`.
+
+**`DeltaSource` is built** ([`DeltaSource.scala`](../src/main/scala/com/senzing/spark/glue/DeltaSource.scala))
+— the watermark seam over a Delta table's **Change Data Feed**; cursor = table **version**, same
+`OffsetWatermark`. `nextChunk` reads CDF for a bounded window of versions `[cursor, min(cursor+versionsPerBatch,
+latest+1))` filtered to new rows. Prereqs: CDF enabled (`delta.enableChangeDataFeed=true`) + a STRING
+`value` column holding the JSON body. ⚠ **version-granular, not row-count-granular** — a single large
+commit is one batch; keep source commits modest or raise `recordsPerBatch` so the engine repartitions a
+big version. For the tightest tail-freeness prefer Kafka. `delta-spark` is `Provided` (present on
+Databricks / add via `--packages io.delta:delta-spark_2.13:4.0.0`).
+
+**Testing:** `MqToKafkaSpec` (produce-then-ack write-ahead + throttle boundary, Mockito channel/producer),
+`DeltaSourceSpec` (version-window arithmetic), and `KafkaSourceIT` (broker end-to-end, `IntegrationTest` —
+`SZ_IT=1 SZ_KAFKA_BOOTSTRAP=… `). Kafka/Delta/RabbitMQ end-to-end need live infra.

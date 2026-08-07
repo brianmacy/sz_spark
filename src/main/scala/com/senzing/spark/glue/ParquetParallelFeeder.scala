@@ -16,12 +16,13 @@ import com.senzing.spark.jobs.SparkJob
  * (~4x regression). v2 hands Spark multi-file chunks and lets partitions carry the data; see
  * [[OverlappingBatchEngine]].
  *
- * Args: `source` (default `inbox`; also `kafka`), `runId`; inbox source: `inbox`, `processing`,
- * `archive` (opt), `recordsPerShard` (drainer shard size, 1000); kafka source: `bootstrapServers`,
- * `topic`, `checkpoint` (durable offset dir), `startingOffset` (`earliest`|`latest`|<number>, cold
- * start only), `minPartitions` (read fan-out, 1); engine: `staging`, `deadLetter` (opt), `output`
- * (opt), `recordsPerBatch` (1000), `maxUnprocessedBatches` (200), `trigger`
- * (`default`|`availableNow`), `emptyMs` (30000).
+ * Args: `source` (default `inbox`; also `kafka`, `delta`), `runId`; inbox source: `inbox`,
+ * `processing`, `archive` (opt), `recordsPerShard` (drainer shard size, 1000); kafka source:
+ * `bootstrapServers`, `topic`, `checkpoint` (durable offset dir), `startingOffset`
+ * (`earliest`|`latest`|<number>, cold start only), `minPartitions` (read fan-out, 1); delta source:
+ * `tablePath`, `checkpoint`, `startingVersion` (`latest`|<number>, cold start only),
+ * `versionsPerBatch` (1); engine: `staging`, `deadLetter` (opt), `output` (opt), `recordsPerBatch`
+ * (1000), `maxUnprocessedBatches` (200), `trigger` (`default`|`availableNow`), `emptyMs` (30000).
  *
  * DEFAULT OPERATING POINT: `recordsPerBatch=1000` ⇒ ONE partition/batch (independent commit,
  * straggler = one slot) and `maxUnprocessedBatches=200` ≈ slot count + buffer (so a straggler costs
@@ -79,9 +80,27 @@ object ParquetParallelFeeder extends SparkJob {
           recordsPerBatch = recordsPerBatch,
           minPartitions = m.getOrElse("minPartitions", "1").toInt
         )
+      case "delta" =>
+        val tablePath = m.getOrElse("tablePath", "")
+        val checkpoint = m.getOrElse("checkpoint", "")
+        require(
+          tablePath.nonEmpty && checkpoint.nonEmpty,
+          "tablePath= and checkpoint= are required for source=delta"
+        )
+        val start = DeltaSource.resolveStart(spark, tablePath, m.getOrElse("startingVersion", "0"))
+        val name = tablePath.replaceAll("[^A-Za-z0-9_.-]", "_")
+        val cpFile = new Path(checkpoint, s"version-$name")
+        val watermark =
+          new OffsetWatermark(ShardIo.fileSystem(spark, checkpoint), cpFile, start)
+        new DeltaSource(
+          spark,
+          tablePath,
+          watermark,
+          versionsPerBatch = m.getOrElse("versionsPerBatch", "1").toInt
+        )
       case other =>
         throw new IllegalArgumentException(
-          s"unknown source=$other (built: 'inbox', 'kafka'; 'delta' is a future adapter)"
+          s"unknown source=$other (built: 'inbox', 'kafka', 'delta')"
         )
     }
 

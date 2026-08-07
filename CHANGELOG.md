@@ -6,6 +6,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **RabbitMQ→Kafka bridge** (`glue.MqToKafka`, Step 2b) — a plain-JVM competing consumer (the
+  RabbitMQ→Kafka analog of the `MqToParquet` drainer) that moves records from the queue onto the topic
+  `KafkaSource` reads, **throttled so the Spark consumer stays ≤ `maxLag` (default 5,000,000) records
+  behind**: `lag = latestKafkaOffset − committedOffset` (the committed offset read from the SAME
+  checkpoint the feeder writes), pausing drains while `lag ≥ maxLag` so unread Kafka stays bounded —
+  Kafka retention + this cap replace unbounded queue growth. Same write-ahead invariant as the parquet
+  drainer: **produce-THEN-ack** (crash between ⇒ RabbitMQ redelivers ⇒ duplicate ⇒ idempotent
+  `add_record` absorbs it). Unit-tested (`MqToKafkaSpec`): produce-before-ack ordering + the throttle
+  boundary, Mockito channel/producer. Args: `amqpUrl` / `queue` / `bootstrapServers` / `topic` /
+  `checkpoint` / `maxLag` / `batchRecords`.
+- **Delta source for the parallel-batch feeder** (`glue.DeltaSource`, Step 2c) — the watermark seam over
+  a Delta table's **Change Data Feed**; cursor = table **version**, reusing `glue.OffsetWatermark`.
+  `nextChunk` reads CDF for a bounded window of versions `[cursor, min(cursor+versionsPerBatch, latest+1))`
+  filtered to new rows; `commit` advances the contiguous-prefix watermark; `reclaim` is a no-op. Prereqs:
+  CDF enabled + a STRING `value` column holding the JSON body. ⚠ **version-granular, not
+  row-count-granular** (a large commit is one batch — prefer Kafka for the tightest tail-freeness).
+  `delta-spark` added `Provided`. `source=delta` (args `tablePath` / `checkpoint` / `startingVersion` /
+  `versionsPerBatch`). Unit-tested (`DeltaSourceSpec`): the version-window arithmetic.
+- **`glue.KafkaSourceIT`** — broker end-to-end IntegrationTest (produces to a fresh topic, drives
+  `KafkaSource` + `OffsetWatermark`, asserts count-bounded ranges + projection + watermark advance).
+  Tagged `IntegrationTest` (excluded from `sbt test`); run with `SZ_IT=1 SZ_KAFKA_BOOTSTRAP=<broker>`.
+- `kafka-clients` (3.9.1, matching Spark 4.0.1) added **bundled** so the standalone bridge runs from the
+  FAT jar and the driver-side `endOffsets` call needs no `--packages`.
 - **Kafka source for the parallel-batch feeder** (`glue.KafkaSource`, Step 2) — the watermark-flavor
   `RecordSource` counterpart to the on-prem `InboxSource`, object-store-safe / Databricks-native. Same
   `OverlappingBatchEngine`, only the source differs (`source=kafka`). Design (locked): **ONE

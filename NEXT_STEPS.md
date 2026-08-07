@@ -8,28 +8,28 @@ deficit vs the Rust fleet was a **stale engine baked into the jar**, NOT the fee
 the fleet's `4.4.0.DEVELOPMENT` engine restored parity (CPU 44%→55.5% ≈ Rust 57%). See
 `docs/PARALLEL_BATCH_FEEDER.md`, `docs/BUILD_AGAINST_FLEET_ENGINE.md`.
 
-## ★ STEP 2(a) — KAFKA SOURCE — ✅ DONE (branch `bem_kafka_source`, pending push)
+## ★ STEP 2 — COMPLETE
 
-`glue.KafkaSource` (watermark seam) + `glue.OffsetWatermark` (contiguous-completed-prefix, durable) +
-`source=kafka` wiring + `spark-sql-kafka-0-10` (Provided). ONE unpartitioned topic, `minPartitions`
-fan-out, count-bounded batches. 115/115 unit tests. See `docs/PARALLEL_BATCH_FEEDER.md` §Step 2 and
-`.claude/faqs/deployment/kafka-source.md`.
+(a) `glue.KafkaSource` ✅ (PR #6, merged) · (b) `glue.MqToKafka` RabbitMQ→Kafka bridge ✅ ·
+(c) `glue.DeltaSource` ✅ · broker e2e `KafkaSourceIT` ✅ (scaffolded). Branch `bem_step2_complete`,
+pending push. The parallel-batch feeder now supports `inbox` / `kafka` / `delta`. See
+`docs/PARALLEL_BATCH_FEEDER.md` §Step 2 and `.claude/faqs/deployment/kafka-source.md`.
 
-## ★ NEXT — PR #6 (Kafka), then finish Step 2
+## ★ NEXT — validate on live infra, then fleet A/B
 
-1. **PR #6 open against `main`** (`bem_kafka_source` pushed). Watch `gh pr checks 6`; merge on green.
-2. **STEP 2(b) — RabbitMQ→Kafka bridge:** read RabbitMQ → produce to the Kafka topic, **throttled so the
-   Spark consumer stays ≤ ~5M records behind** (`latestOffset − committedOffset` cap). Kafka as the
-   durable buffer (the RabbitMQ→Kafka analog of the drainer→parquet seam).
-3. **STEP 2(c) — `DeltaSource`:** Delta table version / CDF watermark implementing the same seam.
-4. **Broker end-to-end IntegrationTest** for `KafkaSource` (produce → feed → verify), like `FatJarIT`.
-5. **`.142`-Rust baseline** — run the Rust consumer on `.142` (same host) to remove the ~9% host-asymmetry
-   confound from the parity number. **Collapse `SparkRecordOps` 3-jobs/batch** to a one-pass sink.
+1. **Push `bem_step2_complete` + PR** (bridge + Delta + IT + docs); watch `gh pr checks`; merge on green.
+2. **Run the e2e ITs on real infra** — `KafkaSourceIT` against a live broker (`SZ_IT=1 SZ_KAFKA_BOOTSTRAP=…`);
+   a Delta CDF e2e (CDF-enabled table + `value` column); a RabbitMQ→Kafka bridge e2e (queue → topic,
+   verify throttle + produce-then-ack).
+3. **Fleet A/B: Kafka path vs parquet path** — feeder identical, only the source differs; both DB-bound.
+   Stand up a broker, run `MqToKafka` + `source=kafka` on `.142`, compare to the merged parquet path.
+4. **`.142`-Rust baseline** (host-asymmetry confound) + **collapse `SparkRecordOps` 3-jobs/batch** to one-pass.
 
 Locked (don't re-litigate): overlapping-batches (NOT over-decomposition / NOT worker-pull); source seam
 `{nextChunk, read→DataFrame, commit}` with per-unit-dispose vs monotonic-watermark flavors; `engine.ConfigDrift`
 is the sole reinit (keep it); 1 partition/batch + `maxUnprocessedBatches` ≥ `spark.cores.max`; Kafka =
-ONE unpartitioned topic + `minPartitions` (never partition by a resolution key).
+ONE unpartitioned topic + `minPartitions` (never partition by a resolution key); Delta is version-granular
+(prefer Kafka for tail-freeness); bridge = produce-THEN-ack + ≤ maxLag throttle.
 
 ## Streaming ingest — ✅ landed (PR #4 on `main`; kept for history)
 

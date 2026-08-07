@@ -1,10 +1,30 @@
 # Project Status
 
-**Date:** 2026-06-30
-**Branch:** main
-**Commits:** 0 — the entire working tree is intentionally uncommitted, pending user review before the first commit.
+**Date:** 2026-08-06
+**Branch:** bem_rabbitmq_ingest
+**State:** the M0–M16 reference implementation is in place; this branch adds the **streaming ingest
+path** (parquet inbox → long-running feeder → engine) and, in the current uncommitted changelist,
+three features on top of it. Ask the user before committing.
 
-## What is complete
+## Current branch work (uncommitted changelist)
+
+New assets + docs for the streaming feeder, pending review/commit:
+
+| Feature | Components |
+|---|---|
+| Dead-letter handling | `glue.ParquetStreamFeeder` now persists each batch's `SplitResult` — `errors` → durable `deadLetter` dir (DLQ), `good` → `output` change-feed, both `SaveMode.Append`, both opt-in; `glue.DeadLetterReprocess` replays the reprocessable categories. Tests in `ParquetStreamFeederSpec`. See `docs/DEAD_LETTER.md`. |
+| `getStats` sampler | `diag.StatsPlugin` (Spark `SparkPlugin`: executor + driver) + `diag.StatsSampler` — one sampler thread per executor JVM, reset-on-read `getStats()` on a cadence → driver log (`SZ_STATS`). Opt-in via `spark.plugins`. Adds non-building probes `SzEngineProvider.tryEngine()` / `EngineLifecycle.peek()`. Tests in `diag/`. |
+| Repartition removal | dropped the per-batch `repartition(N)` in `ParquetStreamFeeder.foreachBatch` (pure overhead, ~0.1% of wall, closed no gap). |
+
+Measured findings captured in `docs/PERFORMANCE.md` §"Measured findings": the Rust consumer and Spark
+feeder are performance-equivalent at the same duty cycle; on a shared, growing DB use duty cycle +
+invariant per-record counters, not wall clock.
+
+The prior streaming-feeder scaffolding on this branch (`core/` + `glue/` split, `AddCore`,
+`ParquetStreamFeeder`, the RabbitMQ two-stage design) is already committed; see
+`docs/RABBITMQ_INGEST.md` and `docs/JOB_LAYERING.md`.
+
+## What is complete (M0–M16 baseline)
 
 The full Senzing-on-Spark reference implementation was built end-to-end in this session (milestones M0–M16):
 
@@ -37,4 +57,7 @@ The full Senzing-on-Spark reference implementation was built end-to-end in this 
 
 ## Uncommitted state
 
-The working tree has no commits. Global project rule: **ask the user before committing**. Nothing is lost — git tracks all files and the user may review the full diff before approving the first commit.
+The current changelist (dead-letter + reprocess, `StatsPlugin` sampler, repartition removal, and the
+accompanying docs) is **uncommitted**, pending review. Global project rule: **ask the user before
+committing**. Nothing is lost — git tracks all files and the user may review the full diff before
+approving the commit.

@@ -3,6 +3,50 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Added
+- **Dead-letter capture in the streaming feeder** (`glue.ParquetStreamFeeder`): each micro-batch's
+  `SplitResult` is now persisted instead of discarded — the `errors` frame to a durable `deadLetter`
+  dir (the on-prem DLQ) and the `good` frame to an append-only `output` change-feed, both
+  `SaveMode.Append` and both opt-in (empty path ⇒ no write, back-compat). At-least-once with
+  downstream dedup on `(dataSource, recordId, category)` / `(dataSource, recordId, entityId)`; no
+  shard is ever dropped. Closes the silent-orphan gap (a record with a `DSRC_RECORD` row but no
+  resolved-entity row and no error artifact). See [`docs/DEAD_LETTER.md`](docs/DEAD_LETTER.md).
+- **`glue.DeadLetterReprocess`** — a thin one-pass job that reads the dead-letter dir, keeps the
+  reprocessable categories (`RETRY_EXHAUSTED`, `CONFIG_RELEVANT`, `REPLACE_CONFLICT`), leaves terminal
+  ones (`BAD_INPUT`, `NOT_FOUND`) quarantined, and re-emits the survivors as `InputRecord` parquet
+  shards into a re-feed dir. Cadence is left to a cron/supervisor.
+- **`diag.StatsPlugin` / `diag.StatsSampler`** — an opt-in Spark plugin
+  (`--conf spark.plugins=com.senzing.spark.diag.StatsPlugin`) that starts exactly one sampler thread
+  per executor JVM and emits the engine's reset-on-read `getStats()` on a time cadence
+  (`spark.senzing.statsIntervalMs`, default 5 min) to the driver log under the `SZ_STATS` prefix
+  (executor-log fallback if the driver send fails). Zero cost / zero code path when not listed; never
+  forces an engine build on a non-Senzing executor. Adds `SzEngineProvider.tryEngine()` /
+  `EngineLifecycle.peek()` non-building probes.
+
+### Changed
+- **`DATA_SOURCE` + `RECORD_ID` are read from the record body and REQUIRED.** The loaders/drainer
+  previously stamped `DATA_SOURCE` from an external launch arg; both keys now come from the record
+  JSON (as `RECORD_ID` already did), and a record missing either is routed to the `BadInput`
+  dead-letter without an engine call — never silently stamped. The `dataSource` launch arg is gone.
+  (Search/redo paths, which need no record key, are unaffected.)
+- **Removed the per-batch `repartition(N)`** from `ParquetStreamFeeder.foreachBatch`. It inserted a
+  shuffle stage (executor slots idle on I/O) and could reduce the partition count below the input file
+  count; measured ~0.1% of batch wall time and closed no throughput gap. The file source's partitions
+  now feed the executor slots directly (read + `add_record` fuse into one pipelined stage). See
+  [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) §"Measured findings".
+
+### Docs
+- `docs/PERFORMANCE.md`: new "Measured findings" section — loader-source A/B (Rust consumer vs Spark
+  feeder are equivalent at the same ~duty cycle; an earlier apparent deficit was a confounded
+  shared-DB measurement plus host asymmetry) and the repartition-removal rationale; plus the
+  methodology note that on a shared, growing DB throughput/wall-clock is not a measurable — use duty
+  cycle and invariant per-record counters, and cost-weight before calling anything a bottleneck.
+- New `docs/DEAD_LETTER.md`; `docs/RABBITMQ_INGEST.md` reconciled to the final feeder (no per-batch
+  repartition, dead-letter/output sinks); `docs/JOB_LAYERING.md` gains the `glue` reprocess job and a
+  `diag` row; README reflects the three features and indexes the new docs.
+
 ## [0.1.2] - 2026-06-30
 
 ### Added

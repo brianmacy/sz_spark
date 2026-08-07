@@ -49,6 +49,16 @@ final class EngineLifecycle(
     }
   }
 
+  /**
+   * Non-building peek at the shared env: `Some(env)` only if it has already been built and not yet
+   * destroyed, else `None`. Unlike [[acquire]] this NEVER triggers a build — the stats sampler
+   * ([[com.senzing.spark.diag.StatsPlugin]]) polls it to wait for a live engine without forcing one
+   * onto a non-Senzing executor.
+   */
+  def peek(): Option[SzEnvironment] = lock.synchronized {
+    if (built && !destroyed && env != null) Some(env) else None
+  }
+
   def livenessCount: Int = lock.synchronized(liveness)
   def isBuilt: Boolean = lock.synchronized(built)
   def isDestroyed: Boolean = lock.synchronized(destroyed)

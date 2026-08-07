@@ -78,6 +78,14 @@ object SzEngineProvider {
   /** The shared engine. */
   def engine(): SzEngine = acquire().getEngine()
 
+  /**
+   * Non-building probe for the live engine: `None` until the first task has lazily built it, then
+   * `Some(engine)`. The stats sampler polls this so it NEVER forces a build (a non-Senzing executor
+   * — e.g. a `local[*]` drainer — must stay engine-free). See
+   * [[com.senzing.spark.diag.StatsPlugin]].
+   */
+  def tryEngine(): Option[SzEngine] = lifecycle.peek().map(_.getEngine())
+
   /** Run a verb under the read lock so a concurrent config reinit (write lock) quiesces it. */
   def withReadLock[T](body: => T): T = {
     rwl.readLock().lock()

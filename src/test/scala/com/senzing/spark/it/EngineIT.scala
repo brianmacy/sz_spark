@@ -34,8 +34,8 @@ final class EngineIT extends AnyFunSuite {
     val in = Files.createTempFile("recs", ".jsonl")
     Files.writeString(
       in,
-      """{"RECORD_ID":"1","PRIMARY_NAME_FULL":"Jane Doe"}
-        |{"RECORD_ID":"2","PRIMARY_NAME_FULL":"John Roe"}
+      """{"DATA_SOURCE":"TEST","RECORD_ID":"1","PRIMARY_NAME_FULL":"Jane Doe"}
+        |{"DATA_SOURCE":"TEST","RECORD_ID":"2","PRIMARY_NAME_FULL":"John Roe"}
         |""".stripMargin
     )
     val out = tmpDir("out")
@@ -45,7 +45,6 @@ final class EngineIT extends AnyFunSuite {
         s"output=$out",
         s"errors=${tmpDir("err")}",
         s"staging=${tmpDir("stg")}",
-        "dataSource=TEST",
         "partitions=2"
       )
     )
@@ -100,7 +99,7 @@ final class EngineIT extends AnyFunSuite {
   test("delete of an absent record is a benign no-op (no error rows)", IntegrationTest) {
     assume(enabled, "requires SZ_IT=1 + a live engine and database")
     val in = Files.createTempFile("del", ".jsonl")
-    Files.writeString(in, "{\"RECORD_ID\":\"NEVER-LOADED-9999\"}\n")
+    Files.writeString(in, "{\"DATA_SOURCE\":\"TEST\",\"RECORD_ID\":\"NEVER-LOADED-9999\"}\n")
     val err = tmpDir("derr")
     DeleteJob.main(
       Array(
@@ -108,7 +107,6 @@ final class EngineIT extends AnyFunSuite {
         s"output=${tmpDir("dout")}",
         s"errors=$err",
         s"staging=${tmpDir("dstg")}",
-        "dataSource=TEST",
         "partitions=1"
       )
     )

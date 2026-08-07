@@ -78,7 +78,7 @@ config. Never run it inside a data job (two engines in one process crash).
 JAR task: main class `com.senzing.spark.jobs.InitJob`, parameters:
 ```
 dialect=postgresql
-db=jdbc:postgresql://DBHOST:5432/G2?sslmode=require&user=USER&password=PASS
+db=jdbc:postgresql://DBHOST:5432/senzing?sslmode=require&user=USER&password=PASS
 dataSources=CUSTOMERS
 ```
 
@@ -88,9 +88,14 @@ Create a multi-task Job (Workflows), each task a **JAR task** on the configured 
 
 | Task | Main class | Key parameters |
 |---|---|---|
-| add-update | `com.senzing.spark.jobs.AddUpdateJob` | `input=… output=… errors=… staging=… dataSource=CUSTOMERS partitions=N` |
+| add-update | `com.senzing.spark.jobs.AddUpdateJob` | `input=… output=… errors=… staging=… partitions=N` |
 | delete | `com.senzing.spark.jobs.DeleteJob` | same shape |
 | search | `com.senzing.spark.jobs.SearchJob` | `input=<requests.jsonl> output=… …` |
+
+Each record's JSON body carries its own `DATA_SOURCE` and `RECORD_ID` (both required) — there is **no**
+per-job `dataSource=` load parameter; the `dataSources=` parameter above (InitJob) is the separate
+config-registration one. A record missing either key is dead-lettered as `BAD_INPUT` without an engine
+call.
 
 Order the loaders after init (hard dependency). Add a **separate, scheduled Job** for
 `com.senzing.spark.jobs.RedoJob` (e.g. every few minutes) — `getRedoRecord()==null` is not "done"

@@ -2,6 +2,7 @@ package com.senzing.spark.jobs
 
 import java.nio.file.Files
 
+import com.senzing.spark.core.SparkRecordOps
 import com.senzing.spark.model.{Op, StagingKind}
 import com.senzing.spark.work._
 import org.apache.spark.sql.{Row, SparkSession}

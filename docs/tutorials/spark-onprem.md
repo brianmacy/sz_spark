@@ -47,13 +47,13 @@ export SENZING_ENGINE_CONFIGURATION_JSON='{
   "PIPELINE":{"CONFIGPATH":"/etc/opt/senzing",
               "RESOURCEPATH":"/opt/senzing/er/resources",
               "SUPPORTPATH":"/opt/senzing/data"},
-  "SQL":{"CONNECTION":"postgresql://USER:PASS@DBHOST:5432/G2"}}'
+  "SQL":{"CONNECTION":"postgresql://USER:PASS@DBHOST:5432/senzing"}}'
 export PGSSLMODE=require   # for managed/cloud PG; "disable" only for a local no-SSL dev PG
 export LD_LIBRARY_PATH=/opt/senzing/er/lib   # on the (build/admin) host that has the dist
 
 # Run ONCE (separate process — never inside a Spark job): applies schema DDL + registers default config.
 java -cp target/scala-2.13/sz-spark-assembly.jar com.senzing.spark.jobs.InitJob \
-  dialect=postgresql db="jdbc:postgresql://DBHOST:5432/G2?user=USER&password=PASS&sslmode=require" \
+  dialect=postgresql db="jdbc:postgresql://DBHOST:5432/senzing?user=USER&password=PASS&sslmode=require" \
   dataSources=CUSTOMERS
 ```
 
@@ -80,8 +80,13 @@ spark-submit \
   --conf spark.executorEnv.SENZING_ENGINE_CONFIGURATION_JSON="$SENZING_ENGINE_CONFIGURATION_JSON" \
   target/scala-2.13/sz-spark-assembly.jar \
   input=hdfs:///data/customers.jsonl output=hdfs:///out/affected errors=hdfs:///out/errors \
-  staging=hdfs:///staging/addupdate dataSource=CUSTOMERS partitions=64
+  staging=hdfs:///staging/addupdate partitions=64
 ```
+
+> **Input contract:** each record's JSON body carries its own `DATA_SOURCE` and `RECORD_ID` (both
+> required) — there is **no** per-job `dataSource=` load argument. `InitJob`'s `dataSources=` above
+> is the separate config-registration argument. A record missing `DATA_SOURCE`/`RECORD_ID` is
+> dead-lettered as `BAD_INPUT` without an engine call.
 
 **Why `memoryOverhead` not heap:** Senzing is native C; its working set is off-heap. Size it
 `≈ 4 GB + 1 GB × spark.executor.cores`; under-sizing gets executors OOM-killed. Memory scales with the
@@ -93,7 +98,7 @@ same cores knob as concurrency.
 ## 5. Run the other jobs
 
 ```bash
-# Delete:  --class com.senzing.spark.jobs.DeleteJob   ... dataSource=CUSTOMERS
+# Delete:  --class com.senzing.spark.jobs.DeleteJob   input=.../to-delete.jsonl ...
 # Search:  --class com.senzing.spark.jobs.SearchJob   input=.../requests.jsonl ...
 # Redo:    --class com.senzing.spark.jobs.RedoJob      output=... staging=... partitions=64 redoBatch=100000
 ```

@@ -53,10 +53,10 @@ as a pre-load EMR step. Example from a bastion with the dist installed:
 # Aurora uses its OWN connection scheme + plugin (libaurorapostgresqlplugin); plain RDS PostgreSQL uses
 # postgresql://. CONFIGPATH = the Senzing config dir (/etc/opt/senzing on a standard install, or your
 # sz_create_project etc/). RESOURCEPATH/SUPPORTPATH are distinct trees.
-export SENZING_ENGINE_CONFIGURATION_JSON='{"PIPELINE":{"CONFIGPATH":"/etc/opt/senzing","RESOURCEPATH":"/opt/senzing/er/resources","SUPPORTPATH":"/opt/senzing/data"},"SQL":{"CONNECTION":"aurorapostgresql://USER:PASS@AURORA_ENDPOINT:5432/G2"}}'
+export SENZING_ENGINE_CONFIGURATION_JSON='{"PIPELINE":{"CONFIGPATH":"/etc/opt/senzing","RESOURCEPATH":"/opt/senzing/er/resources","SUPPORTPATH":"/opt/senzing/data"},"SQL":{"CONNECTION":"aurorapostgresql://USER:PASS@AURORA_ENDPOINT:5432/senzing"}}'
 export PGSSLMODE=require LD_LIBRARY_PATH=/opt/senzing/er/lib
 java -cp sz-spark-assembly.jar com.senzing.spark.jobs.InitJob \
-  dialect=postgresql db="jdbc:postgresql://AURORA_ENDPOINT:5432/G2?user=USER&password=PASS&sslmode=require" \
+  dialect=postgresql db="jdbc:postgresql://AURORA_ENDPOINT:5432/senzing?user=USER&password=PASS&sslmode=require" \
   dataSources=CUSTOMERS
 ```
 
@@ -98,11 +98,14 @@ aws emr add-steps --cluster-id j-XXXX --steps '[{
           "s3://YOUR_BUCKET/sz-spark/sz-spark-assembly.jar",
           "input=s3://YOUR_BUCKET/data/customers.jsonl",
           "output=s3://YOUR_BUCKET/out/affected","errors=s3://YOUR_BUCKET/out/errors",
-          "staging=s3://YOUR_BUCKET/staging/addupdate","dataSource=CUSTOMERS","partitions=64"]
+          "staging=s3://YOUR_BUCKET/staging/addupdate","partitions=64"]
 }]'
 ```
 
-Swap `--class` for `DeleteJob` / `SearchJob`. Run **`RedoJob` on a schedule** (EventBridge → add-steps,
+Each record's JSON body supplies its own `DATA_SOURCE` and `RECORD_ID` (both required) — there is **no**
+per-job `dataSource=` load argument; `InitJob`'s `dataSources=` registration argument is separate. A
+record missing either key is dead-lettered as `BAD_INPUT` without an engine call. Swap `--class` for
+`DeleteJob` / `SearchJob`. Run **`RedoJob` on a schedule** (EventBridge → add-steps,
 or Airflow/MWAA) — the redo queue refills, so it's recurring, one instance at a time.
 
 ## Gotchas

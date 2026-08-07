@@ -3,10 +3,12 @@ ThisBuild / version := "0.1.0"
 // Spark 4.0 is built for Scala 2.13. Pin to the exact target Databricks runtime's 2.13.x.
 ThisBuild / scalaVersion := "2.13.16"
 
-// Spark stays on the 4.0 series (provided — pin to the Databricks runtime); 4.1/4.2 are deliberate
-// non-adoptions until the target cluster moves.
-val sparkVersion = "4.0.2"
-// Spark 4.0 ships Jackson 2.18.x; keep ours aligned and `Provided` (the cluster provides it).
+// Anchor to the Databricks LTS: DBR 17.3 LTS runs Apache Spark 4.0.0 (supported to Oct 2028), so the
+// jar is built against Spark 4.0.x (Provided), Scala 2.13. The on-prem rig runs a matching 4.0.x dist
+// (NOT the staged 4.1.1). Delta (entity-mart workstream) pins delta-spark_4.0_2.13 (Delta 4.x supports
+// Spark 4.0.1). DBR 18.2 / Spark 4.1 is latest-not-LTS; revisit only if we move off the LTS.
+val sparkVersion = "4.0.1"
+// Keep Jackson aligned to Spark's and `Provided`-adjacent (bundled copy used by non-Spark paths).
 val jacksonVersion = "2.18.2"
 
 // Senzing install root holding the Java SDK jar + native libs. NOT on Maven Central.
@@ -55,6 +57,8 @@ lazy val root = (project in file("."))
       // the standalone engine path too (InitJob / SelfCheck, no Spark). Pinned to Spark 4.0's Jackson
       // so the bundled copy matches the cluster's — no version conflict.
       "com.fasterxml.jackson.core" % "jackson-databind" % jacksonVersion,
+      // RabbitMQ ingest glue (MqToParquet) — Apache-2.0. Bundled (cluster does not ship it).
+      "com.rabbitmq" % "amqp-client" % "5.21.0",
       // InitJob schema/admin runs standalone (not on the cluster) — bundle a JDBC driver.
       "org.postgresql" % "postgresql" % "42.7.7",
       "org.scalatest" %% "scalatest"   % "3.2.19" % Test, // 3.3.0 is still a snapshot

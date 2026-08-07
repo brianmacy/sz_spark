@@ -7,13 +7,19 @@ import com.senzing.spark.model._
 /** One input record. For search, `recordId` may be empty and `payload` is the attributes JSON. */
 final case class InputRecord(dataSource: String, recordId: String, payload: String)
 
-/** Which verb this worker drives, and how its success output maps to output rows. */
-sealed abstract class WorkerOp(val tag: String)
+/**
+ * Which verb this worker drives, how its success output maps to output rows, and whether it needs a
+ * record key. `requiresRecordKey` is true for the verbs that address a specific record by
+ * (DATA_SOURCE, RECORD_ID) — add/update and delete — and false for redo (self-sourced) and search
+ * (attributes-only). It gates the required-key dead-letter check in [[RecordWorker.processOne]].
+ */
+sealed abstract class WorkerOp(val tag: String, val requiresRecordKey: Boolean)
 object WorkerOp {
-  case object Add extends WorkerOp(Op.Add) // add/update
-  case object Delete extends WorkerOp(Op.Delete)
-  case object Redo extends WorkerOp(Op.Redo) // affected entities from processRedoRecord
-  case object Search extends WorkerOp("SEARCH")
+  case object Add extends WorkerOp(Op.Add, requiresRecordKey = true) // add/update
+  case object Delete extends WorkerOp(Op.Delete, requiresRecordKey = true)
+  // affected entities from processRedoRecord; the redo record is self-sourced, not keyed here
+  case object Redo extends WorkerOp(Op.Redo, requiresRecordKey = false)
+  case object Search extends WorkerOp("SEARCH", requiresRecordKey = false)
 }
 
 /**
@@ -50,11 +56,23 @@ final class RecordWorker(
 
   /** Process one record, returning its output/error rows. Maintains per-task state. */
   def processOne(rec: InputRecord): Seq[StagingRow] = {
+    // Required-key gate: a keyed verb (add/update, delete) with a missing/blank DATA_SOURCE or
+    // RECORD_ID is dead-lettered as BadInput WITHOUT calling the engine — never silently keyed empty.
+    if (op.requiresRecordKey && (isBlank(rec.dataSource) || isBlank(rec.recordId))) {
+      val missing = if (isBlank(rec.dataSource)) "DATA_SOURCE" else "RECORD_ID"
+      counters.errored += 1
+      progress.onRecord(counters)
+      return Seq(
+        err(rec, new IllegalArgumentException(s"record missing required $missing"), BadInput, 0)
+      )
+    }
     maybeConfigDrift() // throttled, between records
     val rows = loop(rec, attempt = 0, configRetried = false, deadline = clock() + backoff.budgetMs)
     progress.onRecord(counters)
     rows
   }
+
+  private def isBlank(s: String): Boolean = s == null || s.trim.isEmpty
 
   @tailrec
   private def loop(

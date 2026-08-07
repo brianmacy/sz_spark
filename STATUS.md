@@ -1,7 +1,7 @@
 # Project Status
 
 **Date:** 2026-08-07
-**Branch:** bem_kafka_source (not yet pushed / no PR)
+**Branch:** bem_kafka_source — pushed; **PR #6 open** against `main`
 **State:** the M0–M16 reference implementation, the streaming ingest path (PR #4), and the
 source-agnostic overlapping-batch feeder (PR #5) are all on `main`. This branch adds **Step 2(a): the
 Kafka source** (`glue.KafkaSource`) — the watermark-flavor `RecordSource` for the parallel-batch

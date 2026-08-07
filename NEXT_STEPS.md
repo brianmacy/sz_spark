@@ -15,10 +15,9 @@ the fleet's `4.4.0.DEVELOPMENT` engine restored parity (CPU 44%→55.5% ≈ Rust
 fan-out, count-bounded batches. 115/115 unit tests. See `docs/PARALLEL_BATCH_FEEDER.md` §Step 2 and
 `.claude/faqs/deployment/kafka-source.md`.
 
-## ★ NEXT — push `bem_kafka_source`, then finish Step 2
+## ★ NEXT — PR #6 (Kafka), then finish Step 2
 
-1. **Push `bem_kafka_source` + open a PR** after user review of the changelist (KafkaSource + OffsetWatermark
-   + specs + docs/FAQ/CHANGELOG). Watch `gh pr checks`; merge on green + approval.
+1. **PR #6 open against `main`** (`bem_kafka_source` pushed). Watch `gh pr checks 6`; merge on green.
 2. **STEP 2(b) — RabbitMQ→Kafka bridge:** read RabbitMQ → produce to the Kafka topic, **throttled so the
    Spark consumer stays ≤ ~5M records behind** (`latestOffset − committedOffset` cap). Kafka as the
    durable buffer (the RabbitMQ→Kafka analog of the drainer→parquet seam).

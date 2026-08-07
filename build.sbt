@@ -53,6 +53,10 @@ lazy val root = (project in file("."))
       // Spark is on the cluster — never bundled.
       "org.apache.spark" %% "spark-core" % sparkVersion % Provided,
       "org.apache.spark" %% "spark-sql"  % sparkVersion % Provided,
+      // Kafka source (glue.KafkaSource, Step 2). Provided like spark-sql — supply at launch with
+      // `--packages org.apache.spark:spark-sql-kafka-0-10_2.13:<sparkVersion>` (present on Databricks).
+      // Brings kafka-clients transitively for the driver-side endOffsets metadata call.
+      "org.apache.spark" %% "spark-sql-kafka-0-10" % sparkVersion % Provided,
       // WITH_INFO / search JSON parsing + engine-config rewrite. BUNDLED (not provided): these run on
       // the standalone engine path too (InitJob / SelfCheck, no Spark). Pinned to Spark 4.0's Jackson
       // so the bundled copy matches the cluster's — no version conflict.

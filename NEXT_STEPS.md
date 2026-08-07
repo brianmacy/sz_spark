@@ -17,7 +17,7 @@ pending push. The parallel-batch feeder now supports `inbox` / `kafka` / `delta`
 
 ## ★ NEXT — validate on live infra, then fleet A/B
 
-1. **Push `bem_step2_complete` + PR** (bridge + Delta + IT + docs); watch `gh pr checks`; merge on green.
+1. **PR #7 open against `main`** (`bem_step2_complete`); watch `gh pr checks 7`; merge on green.
 2. **Run the e2e ITs on real infra** — `KafkaSourceIT` against a live broker (`SZ_IT=1 SZ_KAFKA_BOOTSTRAP=…`);
    a Delta CDF e2e (CDF-enabled table + `value` column); a RabbitMQ→Kafka bridge e2e (queue → topic,
    verify throttle + produce-then-ack).

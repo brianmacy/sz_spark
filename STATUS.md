@@ -1,7 +1,7 @@
 # Project Status
 
 **Date:** 2026-08-07
-**Branch:** bem_step2_complete (not yet pushed / no PR)
+**Branch:** bem_step2_complete — pushed; **PR #7 open** against `main`
 **State:** M0–M16 + streaming ingest (PR #4) + the overlapping-batch feeder (PR #5) + the Kafka source
 (PR #6) are on `main`. This branch **completes Step 2** of the parallel-batch feeder: the RabbitMQ→Kafka
 bridge, the Delta source, and a broker end-to-end IntegrationTest. Implemented + unit-tested. Ask the

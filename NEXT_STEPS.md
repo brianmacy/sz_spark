@@ -10,10 +10,10 @@ NOT the feeder — rebuilding against the fleet's `4.4.0.DEVELOPMENT` engine res
 44%→55.5% ≈ Rust 57%). See `docs/PARALLEL_BATCH_FEEDER.md`, `docs/BUILD_AGAINST_FLEET_ENGINE.md`, and
 `STATUS.md`. Plan of record: `~/.claude/plans/sz_spark_parallel_batch_feeder.md`.
 
-## ★ NEXT — push this branch, then Step 2 (Kafka)
+## ★ NEXT — monitor PR #5, then Step 2 (Kafka)
 
-1. **Push `bem_parallel_batch_feeder`** after user review of the changelist (feeder + docs/FAQ/CHANGELOG
-   updates this session). No PR exists yet; open one on push.
+1. **Monitor PR #5 CI / await review** — `bem_parallel_batch_feeder` is pushed and PR #5 is open against
+   `main` (feeder code + docs/FAQ/CHANGELOG). Watch `gh pr checks 5`; merge on green + approval.
 2. **`.142`-Rust baseline** — run the Rust consumer on `.142` (same host) to remove the ~9% host-asymmetry
    confound from the parity number (currently `.142`-Spark vs `.141`-Rust).
 3. **STEP 2 — Kafka + bridge:** `KafkaSource` (offset cursor, `minPartitions` fanning ONE unpartitioned

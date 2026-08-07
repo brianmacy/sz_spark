@@ -1,11 +1,11 @@
 # Project Status
 
 **Date:** 2026-08-07
-**Branch:** bem_parallel_batch_feeder (4 commits, not yet pushed / no PR)
+**Branch:** bem_parallel_batch_feeder — pushed; **PR #5 open** against `main`
 **State:** the M0–M16 reference implementation + streaming ingest path are on `main` (PR #4 merged
 2026-08-07). This branch adds the **source-agnostic overlapping-batch feeder** (Step 1, RabbitMQ path)
-that kills the micro-batch straggler tail. Implemented, unit-tested, and deployed on `.142`. Ask the
-user before pushing.
+that kills the micro-batch straggler tail. Implemented, unit-tested (102/102), and deployed on `.142`.
+Next: monitor PR #5 CI / await review.
 
 ## Current branch work (`bem_parallel_batch_feeder`)
 

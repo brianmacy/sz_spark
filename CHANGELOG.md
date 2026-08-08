@@ -93,6 +93,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) §"Measured findings".
 
 ### Docs
+- **`README.md` front door rewritten** — leads with what sz_spark is and does, a seam diagram, a
+  "what you can build with it" table of the three deployment shapes (on-prem RabbitMQ / streaming-lakehouse
+  Kafka / Databricks-native) each linked to its setup + architecture doc, and a "start here" pointer to the
+  Guides — instead of jumping straight into the build. Replaces the stale feature list (old streaming feeder,
+  no Kafka/Delta/replication).
 - **`docs/tutorial/` — a progressive, adopter-facing Guides series** (new): `README` (index +
   RabbitMQ-vs-Kafka decision guide), `01-architecture` (engine-per-JVM + the two seams), `02-getting-started`,
   `03-rabbitmq-setup`, `04-kafka-setup`, `05-adopt-your-own-source` (implement `RecordSource`), and

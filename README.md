@@ -227,6 +227,14 @@ Results: the affected-entity frame is a change-**notification** feed (IDs only) 
 
 ## Documentation
 
+**New here? Start with the [Guides](docs/tutorial/README.md)** — a progressive series covering the
+architecture, getting started, the [RabbitMQ](docs/tutorial/03-rabbitmq-setup.md) and
+[Kafka](docs/tutorial/04-kafka-setup.md) setups, and how to
+[adopt your own source](docs/tutorial/05-adopt-your-own-source.md) and
+[replication](docs/tutorial/06-adapt-your-own-replication.md).
+
+Reference docs:
+
 - Architecture (how Senzing runs on Spark): [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Runnable `spark-submit` examples: [`docs/EXAMPLES.md`](docs/EXAMPLES.md)
 - Performance & sizing (scaling to billions of records): [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)

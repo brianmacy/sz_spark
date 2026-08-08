@@ -93,6 +93,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) §"Measured findings".
 
 ### Docs
+- **`docs/tutorial/` — a progressive, adopter-facing Guides series** (new): `README` (index +
+  RabbitMQ-vs-Kafka decision guide), `01-architecture` (engine-per-JVM + the two seams), `02-getting-started`,
+  `03-rabbitmq-setup`, `04-kafka-setup`, `05-adopt-your-own-source` (implement `RecordSource`), and
+  `06-adapt-your-own-replication` (the affected-entity feed → your entity store). Diagram-first, concise,
+  self-contained; folds in the hard-won lessons the reference docs scattered (engine-build parity, the
+  ack-on-persist backpressure requirement, `shardRecords`=batch-size, the 1-partition/straggler-free
+  operating point, the contiguous-prefix watermark). Linked as the lead entry from `README.md`.
 - **`docs/BUILD_AGAINST_FLEET_ENGINE.md`** (new) + `.claude/faqs/build/engine-build-parity.md` (new):
   the mandatory engine-build-parity check. `sbt stageNatives` bakes whatever engine `SENZING_DIR`
   holds into the FAT jar, silently; a stale `/opt/senzing` (`4.4.0.26151`) vs the fleet's

@@ -1,5 +1,14 @@
 # Next Steps
 
+## ★ IN FLIGHT (2026-08-08) — adopter-facing Guides tutorial series (`bem_tutorial_series`, docs-only)
+
+`docs/tutorial/` 7-doc series (README + 01-architecture … 06-adapt-your-own-replication), linked from
+`README.md`. Pushing via prep → PR → merge-on-green. **Then:** (a) build the reference **entity-map /
+relationships / `entity_id→JSON` Delta replication** (design in `~/.claude/plans/sz_spark_entity_map_delta_replication.md`)
+that Guide 06 documents the pattern for; (b) handle open **Dependabot** PRs; (c) the `.142` Kafka cutover
+(bridge is validated + staged, not live).
+
+
 ## ★ STEP 1 — PARALLEL-BATCH FEEDER — ✅ DONE + MERGED (PR #5 on `main`)
 
 Source-agnostic **overlapping-batch** feeder (custom FAIR-scheduler driver, K worker threads, 1

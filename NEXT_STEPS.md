@@ -3,6 +3,11 @@
 **Branch:** bem_entity_mart — entity-mart replication (Phase 1). Design of record:
 `~/.claude/plans/sz_spark_entity_map_delta_replication.md`.
 
+## NOW: PR #10 open — monitor CI + await review
+
+`bem_entity_mart` is pushed as **PR #10** (base `main`, not auto-merged). Next action: watch
+`gh pr checks 10`; address any CI failure; merge is the user's call. Then start Phase 2 below.
+
 ## Entity-mart replication — Phase 1 DONE (all in `mart/`)
 
 `EntityMartSchema` + `GetCore` + `EntityMartRows` (+ 7-case `EntityMartRowsSpec`) + `EntityMartSink`/

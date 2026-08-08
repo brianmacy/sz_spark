@@ -1,7 +1,7 @@
 # Project Status
 
 **Date:** 2026-08-08
-**Branch:** bem_entity_mart (WIP — entity-mart replication, not merged)
+**Branch:** bem_entity_mart — **PR #10** (open, against `main`, NOT auto-merged; awaiting review + CI)
 **State:** M0–M16 + streaming ingest (#4) + overlapping-batch feeder (#5) + Kafka source (#6) +
 Step-2 completion / bridge+Delta (#7) + the Guides tutorial series (#8) + the README front door (#9)
 are all on `main`. This branch starts the **entity-mart replication** (the customer's real-time

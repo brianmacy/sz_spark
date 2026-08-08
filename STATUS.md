@@ -26,8 +26,9 @@ affected-entity feed (`WITH_INFO` → `AFFECTED_ENTITIES`) the feeders already e
   surviving entity. It also **confirmed `CLUSTER BY`+DV+CDF DDL runs on OSS delta-spark 4.0.0** (§10).
 - **Best-practice alignment (Senzing-MCP data-mart-replicator):** matches the Entity Refresh Pattern,
   explicit flags, tombstoning, relationship-both-directions, dedup, denormalized tables, canonical hash +
-  change-gate + orphan handling. Deliberately out of scope: the `sz_dm_report` aggregate tables (Databricks
-  aggregates over our map — confirm with customer). See the entity-mart FAQ.
+  change-gate + orphan handling. The `sz_dm_report` aggregate tables are a different mart archetype
+  (analytics-reporting), not a gap — ours is the entity/relationship serving-map style; confirmed
+  acceptable 2026-08-08. See the entity-mart FAQ.
 - **Next (Phase 1.1 / 2, see NEXT_STEPS):** runtime smoke on the fleet (`run-entity-mart.sh` +
   `--packages delta-spark`); `DatabricksUcSink`; Phase-2 orphan `getRecord`-verify + reconcile perf.
 - **Assumed answers to the plan's open questions** (confirm with user): O1 → the §7.4 flag set

@@ -36,10 +36,11 @@ tables (not JSON-blob-as-schema); canonical sorted-key hash for change detection
    `entity_record WHERE entity_id IN (batch ids)` — not cluster-pruned (clustering is on
    `data_source, record_id, entity_id`); a secondary index or delta-based departed detection is a Phase-2
    optimization.
-3. **Aggregate report tables are deliberately out of scope.** The reference also maintains `sz_dm_report`
-   (DSS/CSS/ESB/ERB) via +1/-1 deltas + a lease-based `sz_dm_pending_report` queue. We serve the
-   denormalized map and let Databricks aggregate (the doc's SQL patterns run over our tables). **Confirm
-   with customer** this is intended vs. wanting the 4 canonical pre-aggregated reports.
+3. **Aggregate report tables — a different mart archetype, not a gap (RESOLVED 2026-08-08).** The
+   reference's `sz_dm_report` (DSS/CSS/ESB/ERB via +1/-1 deltas + a `sz_dm_pending_report` queue) is the
+   *analytics/reporting* mart style; ours is the *entity/relationship serving-map* style. `sz_dm_report`
+   is one pattern for one mart style — confirmed acceptable to serve the denormalized map and let
+   Databricks aggregate over it (the doc's SQL patterns run against our exact shape). No action.
 
 ### Remaining (Phase 1.1 / Phase 2)
 1. **Runtime smoke on the fleet** — launch `EntityMartSync` against a live affected feed with

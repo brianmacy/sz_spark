@@ -52,9 +52,15 @@ corresponding clause (`EntityMartSchema.clusterBy` / `.tableProperties` isolate 
 
 ## Status (2026-08-08)
 
-Phase-1 **built + tested** on branch `bem_entity_mart`: `EntityMartSchema`, `GetCore`, `EntityMartRows`
-(+ 7-case `EntityMartRowsSpec`), `EntityMartSink`/`LocalDeltaSink`, `EntityMartSync`. Default suite
-129/0; `EntityMartSinkIT` (local Spark+Delta, no engine) 3/3.
+Phase-1 **merged to `main`** (PR #10): `EntityMartSchema`, `GetCore`, `EntityMartRows`
+(+ `EntityMartRowsSpec`), `EntityMartSink`/`LocalDeltaSink`, `EntityMartSync`, `EntityMartSinkIT` (5
+cases). **Phase-2** (branch `bem_mart_phase2`) adds **`DatabricksUcSink`** — the Unity-Catalog target:
+same `AbstractDeltaSink` MERGE/DELETE logic, only table naming differs (`catalog.schema.\`table\`` vs a
+`` delta.`/path/table` `` path). `EntityMartSync` gained a **`sink=local|uc`** arg (uc requires an
+explicit `staging=` Volume/DBFS dir). `DatabricksUcSinkSpec` covers the UC locator + `catalog.schema`
+parse; a live-UC smoke is the remaining Databricks validation. Tutorial:
+`docs/tutorial/07-entity-mart-replication.md`; deploy: `docs/DATABRICKS.md` §Entity-mart. Default suite
+**133/0**; `EntityMartSinkIT` 5/5.
 
 **Two OSS delta-spark gotchas the sink IT surfaced (both fixed):**
 - **DELETE does not support `IN (subquery)`** (`DELTA_UNSUPPORTED_SUBQUERY`). Express a delete-by-join

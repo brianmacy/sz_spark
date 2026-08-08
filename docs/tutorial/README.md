@@ -24,6 +24,7 @@ Read in order the first time; jump back as reference later.
 | 04 | [Kafka setup](04-kafka-setup.md) | The streaming / lakehouse path: topic → engine, with a durable watermark |
 | 05 | [Adopt your own source](05-adopt-your-own-source.md) | Implement the `RecordSource` seam for any input |
 | 06 | [Adapt your own replication](06-adapt-your-own-replication.md) | Turn the affected-entity feed into your own entity store |
+| 07 | [The entity-mart](07-entity-mart-replication.md) | The built-in replication: resolved entities → read-optimized Delta tables (local or Databricks UC) |
 
 ## Which path do I want?
 

@@ -6,6 +6,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Entity-mart replication — Phase 2: Databricks / Unity Catalog target** — `mart.DatabricksUcSink`
+  extends `AbstractDeltaSink`, reusing every line of the MERGE/DELETE/change-gate/reconcile logic and
+  changing ONLY table naming to a UC three-part `` catalog.schema.`table` `` (the table part
+  backtick-quoted so the `_sync_state`/`_quarantine` bookkeeping tables stay valid identifiers).
+  `EntityMartSync` gained a **`sink=local|uc`** arg (uc requires an explicit `staging=` Volume/DBFS dir);
+  the SAME assembled jar runs on a laptop or Databricks unchanged. `DatabricksUcSinkSpec` (4 cases) covers
+  the UC locator + `catalog.schema` parse. Docs: tutorial **Guide 07**
+  (`docs/tutorial/07-entity-mart-replication.md`) + `docs/DATABRICKS.md` §Entity-mart replication. 133/0 unit.
 - **Entity-mart replication — Phase 1 (`mart/` package)** — the customer's real-time Databricks
   export. Driven by the affected-entity feed (`WITH_INFO` → `AFFECTED_ENTITIES`) the feeders already
   emit → per-id `getEntity` → MERGE into Delta. Design of record:

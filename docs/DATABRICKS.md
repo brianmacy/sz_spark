@@ -122,3 +122,28 @@ hardcode it.
   initial one (see `docs/PERFORMANCE.md`).
 - Off-heap `memoryOverhead` must be correct on **every** node size the autoscaler may pick; a smaller
   node type with the same cores still needs `(4 + cores) GB` overhead.
+
+## Entity-mart replication (Unity Catalog)
+
+To serve the resolved entities to other Databricks jobs/users, run `EntityMartSync` against Unity
+Catalog — the **same assembled jar**, `sink=uc`. It reuses every line of the Delta MERGE/DELETE logic;
+only table naming changes (a `catalog.schema.table` name instead of a `` delta.`/path/table` `` path), and
+Databricks already has the Delta SQL extensions on the session, so no `--packages` is needed. See
+[tutorial Guide 07](tutorial/07-entity-mart-replication.md) for the full model.
+
+- **This is a read job on the engine, not a loader** — it calls `getEntity` per affected entity, so it
+  needs the same engine env (`LD_LIBRARY_PATH`, `SENZING_ENGINE_CONFIGURATION_JSON`) as the loaders, but
+  far less throughput headroom. One env per JVM still applies.
+- **`mart=` is a `catalog.schema`** the job creates its six tables under (four mart + `_sync_state` +
+  `_quarantine`). The runner needs `CREATE TABLE` on that schema.
+- **`staging=` is REQUIRED** — a cluster-writable Volume/DBFS dir for `GetCore`'s intermediate parquet
+  (the local sink defaults it to `<mart>/_staging`, which isn't a path under UC).
+- Schedule it as a recurring Workflow (`trigger=availableNow`) downstream of the loaders, or a long-lived
+  `trigger=loop cadenceMs=<ms>` — a single instance at a time (it advances one `_sync_state` watermark).
+
+```
+spark-submit --class com.senzing.spark.mart.EntityMartSync sz-spark-assembly.jar \
+  sink=uc  mart=main.entity_mart \
+  feed=/Volumes/main/sz/io/output  staging=/Volumes/main/sz/mart_staging \
+  trigger=availableNow
+```

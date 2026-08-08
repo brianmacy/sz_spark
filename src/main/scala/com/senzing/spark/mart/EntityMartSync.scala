@@ -16,11 +16,14 @@ import com.senzing.spark.model.StagingKind
  * epoch). Downstream of the feed and separate from the load feeder, so it can lag during a load
  * crunch and catch up after (the feed buffers) — the cadence is an explicit knob (design O4).
  *
- * Args: `feed` (the feeders' `output=` affected-entity dir; required), `mart` (local Delta base
- * path; required), `staging` (GetCore staging root; default `<mart>/_staging`), `trigger`
- * (`availableNow` one pass | `loop`; default `availableNow`), `cadenceMs` (loop sleep; default
- * 60000). This is the local-proxy driver (O2 = pure-sz_spark target, so the feed is complete by
- * construction — no reconciliation sweep in Phase 1).
+ * Args: `feed` (the feeders' `output=` affected-entity dir; required), `mart` (required — a Delta
+ * base PATH for `sink=local`, or a Unity Catalog `catalog.schema` for `sink=uc`), `sink` (`local` |
+ * `uc`/`databricks`; default `local`), `staging` (GetCore staging root; default `<mart>/_staging`
+ * for local, REQUIRED for uc — a cluster-writable DBFS/Volume dir), `trigger` (`availableNow` one
+ * pass | `loop`; default `availableNow`), `cadenceMs` (loop sleep; default 60000). The two sinks
+ * share ALL MERGE/DELETE logic ([[AbstractDeltaSink]]); only table naming differs. O2 =
+ * pure-sz_spark target, so the feed is complete by construction (no reconciliation sweep in Phase
+ * 1).
  */
 object EntityMartSync extends SparkJob {
 
@@ -37,13 +40,30 @@ object EntityMartSync extends SparkJob {
     val m = GlueArgs.parse(args)
     val feed = arg(m, "feed")
     val martBase = arg(m, "mart")
-    val staging = m.getOrElse("staging", s"${martBase.stripSuffix("/")}/_staging")
+    val sinkKind = m.getOrElse("sink", "local")
+    val staging = m.getOrElse(
+      "staging",
+      sinkKind match {
+        case "uc" | "databricks" =>
+          throw new IllegalArgumentException(
+            "staging= (a cluster-writable path, e.g. a DBFS/Volume dir) is required for sink=uc"
+          )
+        case _ => s"${martBase.stripSuffix("/")}/_staging"
+      }
+    )
     val trigger = m.getOrElse("trigger", "availableNow")
     val cadenceMs = m.getOrElse("cadenceMs", "60000").toLong
 
     val spark = buildSession("sz-entity-mart-sync", extraConf = DeltaConf)
     try {
-      val sink = new LocalDeltaSink(spark, martBase)
+      // Same MERGE/DELETE logic (AbstractDeltaSink) either way — the sink only decides table NAMING:
+      // a path table for the local proxy, a Unity Catalog `catalog.schema` for Databricks.
+      val sink: EntityMartSink = sinkKind match {
+        case "uc" | "databricks" =>
+          val (catalog, schema) = DatabricksUcSink.parseTarget(martBase)
+          new DatabricksUcSink(spark, catalog, schema)
+        case _ => new LocalDeltaSink(spark, martBase)
+      }
       sink.initTables()
       trigger match {
         case "loop" =>

@@ -1,83 +1,75 @@
 # Next Steps
 
-## ★ IN FLIGHT (2026-08-08) — adopter-facing Guides tutorial series (`bem_tutorial_series`, docs-only)
+**Branch:** bem_entity_mart — entity-mart replication (Phase 1). Design of record:
+`~/.claude/plans/sz_spark_entity_map_delta_replication.md`.
 
-`docs/tutorial/` 7-doc series (README + 01-architecture … 06-adapt-your-own-replication), linked from
-`README.md`. Pushing via prep → PR → merge-on-green. **Then:** (a) build the reference **entity-map /
-relationships / `entity_id→JSON` Delta replication** (design in `~/.claude/plans/sz_spark_entity_map_delta_replication.md`)
-that Guide 06 documents the pattern for; (b) handle open **Dependabot** PRs; (c) the `.142` Kafka cutover
-(bridge is validated + staged, not live).
+## NOW: PR #10 open — monitor CI + await review
 
+`bem_entity_mart` is pushed as **PR #10** (base `main`, not auto-merged). Next action: watch
+`gh pr checks 10`; address any CI failure; merge is the user's call. Then start Phase 2 below.
 
-## ★ STEP 1 — PARALLEL-BATCH FEEDER — ✅ DONE + MERGED (PR #5 on `main`)
+## Entity-mart replication — Phase 1 DONE (all in `mart/`)
 
-Source-agnostic **overlapping-batch** feeder (custom FAIR-scheduler driver, K worker threads, 1
-partition/batch) replaced `ParquetStreamFeeder` — 102/102 tests, deployed on `.142`. The apparent ~20%
-deficit vs the Rust fleet was a **stale engine baked into the jar**, NOT the feeder — rebuilding against
-the fleet's `4.4.0.DEVELOPMENT` engine restored parity (CPU 44%→55.5% ≈ Rust 57%). See
-`docs/PARALLEL_BATCH_FEEDER.md`, `docs/BUILD_AGAINST_FLEET_ENGINE.md`.
+`EntityMartSchema` + `GetCore` + `EntityMartRows` (+ 7-case `EntityMartRowsSpec`) + `EntityMartSink`/
+`LocalDeltaSink` + `EntityMartSync` are built, compiling, and tested (default suite 129/0; the
+`EntityMartSinkIT` Delta IT 3/3). Two fixes the IT surfaced and proved: the `relationship` MERGE is
+column-wise `coalesce` (a single-endpoint refresh no longer nulls the opposite direction), and the
+tombstone cascade uses `MERGE ... WHEN MATCHED THEN DELETE` (OSS delta-spark rejects `IN (subquery)`
+in `DELETE`). The IT also confirmed the `CLUSTER BY`+DV+CDF DDL runs on OSS delta-spark 4.0.0 (design
+§10 assumption — CONFIRMED).
 
-## ★ STEP 2 — COMPLETE
+### Best-practice alignment vs the Senzing data-mart-replicator (from the Senzing-MCP)
 
-(a) `glue.KafkaSource` ✅ (PR #6, merged) · (b) `glue.MqToKafka` RabbitMQ→Kafka bridge ✅ ·
-(c) `glue.DeltaSource` ✅ · broker e2e `KafkaSourceIT` ✅ (scaffolded). Branch `bem_step2_complete`,
-pending push. The parallel-batch feeder now supports `inbox` / `kafka` / `delta`. See
-`docs/PARALLEL_BATCH_FEEDER.md` §Step 2 and `.claude/faqs/deployment/kafka-source.md`.
+`reporting_guide topic=data_mart` + the "Advanced Real-time Replication" tutorial are the authority.
+We MATCH the pattern on: SZ_WITH_INFO→AFFECTED_ENTITIES feed; the **Entity Refresh Pattern**
+(re-fetch current state, apply idempotently — NOT ordered delta application, which the docs warn is
+impossible under parallel processing); explicit replication flags (not `*_DEFAULT_FLAGS`); tombstone on
+entity-not-found; **relationship normalization `lo<hi` storing BOTH `match_key` and `rev_match_key`**
+(the doc mandates both — our coalesce MERGE is exactly this); dedup affected ids per batch; denormalized
+tables (not JSON-blob-as-schema); canonical sorted-key hash for change detection.
 
-## ★ NEXT — validate on live infra, then fleet A/B
+1. **✅ DONE (Phase 1.1) — hash change-gate wired.** `EntityMartSink.selectChanged` drops entities whose
+   stored `entity_hash` equals the fresh one before frames are built, so an unchanged re-resolution
+   writes nothing across all four tables (the doc's "skip if unchanged"). The canonical hash now uses
+   US/RS separators (collision-safety). Proven by `EntityMartSinkIT` (change-gate case).
+2. **✅ DONE (Phase 1.1) — orphan-record reconcile.** `reconcileDepartedRecords` deletes an
+   `entity_record` row when its record leaves a surviving entity (delete); a MOVE is re-keyed by the
+   gaining entity's refresh. Proven by `EntityMartSinkIT` (orphan case). ⚠ Phase-2 hardening: if the
+   gaining entity of a move is not in the SAME batch, the row is briefly deleted then re-inserted on that
+   entity's refresh (eventual consistency) — the reference avoids the transient via a `getRecord`-verify
+   sweep; add that if a consumer can't tolerate the brief gap. Also perf: the reconcile reads
+   `entity_record WHERE entity_id IN (batch ids)` — not cluster-pruned (clustering is on
+   `data_source, record_id, entity_id`); a secondary index or delta-based departed detection is a Phase-2
+   optimization.
+3. **Aggregate report tables — a different mart archetype, not a gap (RESOLVED 2026-08-08).** The
+   reference's `sz_dm_report` (DSS/CSS/ESB/ERB via +1/-1 deltas + a `sz_dm_pending_report` queue) is the
+   *analytics/reporting* mart style; ours is the *entity/relationship serving-map* style. `sz_dm_report`
+   is one pattern for one mart style — confirmed acceptable to serve the denormalized map and let
+   Databricks aggregate over it (the doc's SQL patterns run against our exact shape). No action.
 
-1. **PR #7 open against `main`** (`bem_step2_complete`); watch `gh pr checks 7`; merge on green.
-2. **Run the e2e ITs on real infra** — `KafkaSourceIT` against a live broker (`SZ_IT=1 SZ_KAFKA_BOOTSTRAP=…`);
-   a Delta CDF e2e (CDF-enabled table + `value` column); a RabbitMQ→Kafka bridge e2e (queue → topic,
-   verify throttle + produce-then-ack).
-3. **Fleet A/B: Kafka path vs parquet path** — feeder identical, only the source differs; both DB-bound.
-   Stand up a broker, run `MqToKafka` + `source=kafka` on `.142`, compare to the merged parquet path.
-4. **`.142`-Rust baseline** (host-asymmetry confound) + **collapse `SparkRecordOps` 3-jobs/batch** to one-pass.
+### Remaining (Phase 1.1 / Phase 2)
+1. **Runtime smoke on the fleet** — launch `EntityMartSync` against a live affected feed with
+   `--packages io.delta:delta-spark_2.13:4.0.0` (write a `run-entity-mart.sh` on the NAS), point
+   `feed=` at a feeders' `output=$AFFECTED` dir, `mart=` at a local Delta base; verify rows land.
+2. **Wire the change-gate** — the `entity_hash` is computed + stored but the sink still writes every
+   affected entity each batch. Add `AND s.entity_hash <> t.entity_hash` to the `entity`/`entity_doc`
+   MERGEs (and give the concat hash a field delimiter first — current `mkString("")` has a
+   low-probability boundary-collision risk that only matters once the gate gates on it).
+3. **`DatabricksUcSink`** — subclass `AbstractDeltaSink`, override `locator` with UC 3-part names (O2's
+   Databricks-native path); the MERGE/DELETE SQL is unchanged.
+4. **Run `EntityMartSinkIT` in CI** — it's tag-excluded from `sbt test`; the build's global
+   `-l IntegrationTest` in `testOptions` also blocks a `-n` include, so run it with
+   `sbt 'set Test/testOptions := Seq()' "testOnly *EntityMartSinkIT"`. Consider a dedicated
+   `delta-it` tag so it can run in CI without a live engine (unlike the SZ_IT engine ITs).
 
-Locked (don't re-litigate): overlapping-batches (NOT over-decomposition / NOT worker-pull); source seam
-`{nextChunk, read→DataFrame, commit}` with per-unit-dispose vs monotonic-watermark flavors; `engine.ConfigDrift`
-is the sole reinit (keep it); 1 partition/batch + `maxUnprocessedBatches` ≥ `spark.cores.max`; Kafka =
-ONE unpartitioned topic + `minPartitions` (never partition by a resolution key); Delta is version-granular
-(prefer Kafka for tail-freeness); bridge = produce-THEN-ack + ≤ maxLag throttle.
+**Confirm with user** (plan open questions, assumed): O1 → §7.4 flags; O2 → pure-sz_spark Databricks
+target; O4 → configurable cadence.
 
-## Streaming ingest — ✅ landed (PR #4 on `main`; kept for history)
+## Operational (fleet — verify, don't rebuild)
 
-1a. **Stage 1 MQ→parquet drainer** (`glue.MqToParquet`, persist-then-ack) — DONE; running on `.142`.
-    `docs/RABBITMQ_INGEST.md` describes the two-stage path.
-
-1b. **Exercise the feeder end-to-end** on a cluster: dead-letter capture on real failures, then
-    `DeadLetterReprocess` replay; confirm the `SZ_STATS` sampler lands one central stream in the
-    driver log with `--conf spark.plugins=com.senzing.spark.diag.StatsPlugin`. (Streaming feeder done;
-    the parallel feeder now supersedes it — see the top block.)
-
-2. **Hash-pin CI actions** — ✅ DONE. `.github/workflows/ci.yml` SHA-pins the latest majors
-   (`actions/checkout@…9c091bb # v7.0.0`, `actions/setup-java@…1bcf9fb # v5.4.0`,
-   `actions/cache@…55cc834 # v6.1.0`). `.github/dependabot.yml` covers `github-actions` only —
-   Dependabot has no sbt support, so Scala/sbt deps are bumped manually (all at latest stable as of
-   2026-06-30; sbt kept on the 1.x line since 2.0 is a breaking major).
-
-3. **Wire a licensed Senzing dist into CI** — ✅ DONE. `ci.yml` now installs `senzingsdk-runtime`
-   at CI time from Senzing's public apt repo (`senzing-production-apt.s3.amazonaws.com`, mirroring
-   the official `senzing/senzingsdk-runtime` Dockerfile) into `/opt/senzing` on the hosted
-   `ubuntu-latest` runner. No self-hosted runner, no committed SDK, no redistribution. The
-   `Verify Senzing SDK` step still fails fast if the jar is absent after install.
-
-## Short-term (next session)
-
-4. **Validate DRAFT deployment tutorials on real clusters** — `docs/tutorials/spark-onprem.md`, `aws-emr.md`, and `databricks.md` are marked DRAFT and have not been tested on live infrastructure. Walk through each tutorial on its target platform; fix any discrepancies; remove the DRAFT warning header when validated. Update the `tutorials.md` FAQ entry to reflect status.
-
-5. **Multi-node cluster validation** — run `AddUpdateJob` against a real Spark standalone cluster (or Databricks) with ≥2 executors on a shared PostgreSQL instance. Confirm per-JVM singleton behavior, no cross-task env conflicts.
-
-6. **MSSQL / MySQL DDL** — add `SchemaApplier` DDL files for both dialects and exercise via `InitSpec` or a dedicated IT.
-
-7. **`reinitialize()` concurrency certification** — confirm with Senzing support or the MCP that `reinitialize(id)` is safe when other threads hold the engine read-lock and are mid-verb. Document the answer in the threading FAQ.
-
-8. **Dependabot review cadence** — after the first commit, dependabot will open its first PRs within a week. Establish a review/merge cadence; the 21-day cooldown gives breathing room.
-
-## Medium-term
-
-9. **Databricks cluster policy docs** — `docs/DATABRICKS.md` covers init scripts and cluster config. Validate against a real DBR 14+ cluster and update as needed.
-
-10. **Redo dedicated worker** — the current `RedoJob` drains redo as a standalone Spark job. Evaluate whether a single-threaded dedicated redo worker (non-Spark) is preferable for high-throughput scenarios where per-task drain causes contention. See FAQ `redo/redo-strategy`.
-
-11. **Performance benchmarks** — run `AddUpdateJob` on a representative dataset (≥1M records, 4+ executors) and capture records/sec, redo queue depth, and GC pressure. Add to `docs/DESIGN.md`.
+- **Verify the ~234M Kafka backlog drains** on `.142` (`sz-spark-feeder`, ~65 h, DB-bound ~1k/s). When
+  the feeder's committed offset closes within `MAX_LAG=5M` of the topic head, the **bridge resumes**
+  (`get/s` goes non-zero) — that's the steady-state Kafka path. Watch RabbitMQ (`.100:15672`).
+- **`huge/` residual** — confirm `sz-spark-feeder-huge` (local one-shot) processed the ~1-2 giant
+  records and exited on `availableNow`. If it starved, it needs the cluster idle or a local rerun.
+- ⛔ Do NOT run `run-drainer.sh` (retired parquet path). Do NOT stop `sz-kafka` on `.100` or the publisher.

@@ -6,6 +6,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Entity-mart replication — Phase 1 (`mart/` package)** — the customer's real-time Databricks
+  export. Driven by the affected-entity feed (`WITH_INFO` → `AFFECTED_ENTITIES`) the feeders already
+  emit → per-id `getEntity` → MERGE into Delta. Design of record:
+  `sz_spark_entity_map_delta_replication.md`. Components:
+  - **`EntityMartSchema`** — the four read-optimized Delta projections (`entity`, `entity_record` =
+    the entity map, `relationship` normalized `lo<hi`, `entity_doc`) + `_sync_state`/`_quarantine`, as
+    `CREATE TABLE` DDL that works for both a path-based OSS-Delta table (local proxy) and a Unity
+    Catalog name (Databricks). CDF + deletion vectors + liquid clustering on the MERGE key;
+    `refresh_seq`/`updated_at` bookkeeping so a delayed/replayed batch is a no-op.
+  - **`GetCore`** — the engine bracket (one `SzEnvironment` per executor JVM, mirrors `SparkRecordOps`;
+    staged write/read-back so the reads fire once); `getEntity` under an **explicit §7.4 flag OR**
+    (never a `*_DEFAULT_FLAGS` composite); `SzNotFoundException` → GONE (tombstone), `Systemic` →
+    rethrow-loud, else → `_quarantine`.
+  - **`EntityMartRows`** — pure, Jackson-parse transform (field paths verified against the Senzing-MCP
+    v4 entity-read schema) → the four frames + tombstones + a canonical `entity_hash` change-gate;
+    7-case golden-file unit test (`EntityMartRowsSpec`), incl. hash stability-under-reorder.
+  - **`EntityMartSink`**/`LocalDeltaSink` — SQL-through-locator so a `DatabricksUcSink` slots in by
+    name; monotonic (`refresh_seq`-guarded) MERGEs + tombstone cascade. The **`relationship` MERGE is
+    column-wise `coalesce`** so a single-endpoint refresh never nulls the opposite direction's
+    `match_key`/`rev_match_key`; the tombstone cascade uses **`MERGE ... WHEN MATCHED THEN DELETE`**
+    (OSS delta-spark rejects `IN (subquery)` in `DELETE`). Both proven by `EntityMartSinkIT` (a tagged
+    local Spark+Delta IT — no engine — that also confirms the `CLUSTER BY`+DV+CDF DDL runs on OSS
+    delta-spark 4.0.0).
+  - **`EntityMartSync`** — the glue driver: read the affected feed → dedup ids → GetCore → rows →
+    sink; advance the `_sync_state` watermark; `trigger=availableNow|loop` + `cadenceMs` cadence knob.
 - **RabbitMQ→Kafka bridge** (`glue.MqToKafka`, Step 2b) — a plain-JVM competing consumer (the
   RabbitMQ→Kafka analog of the `MqToParquet` drainer) that moves records from the queue onto the topic
   `KafkaSource` reads, **throttled so the Spark consumer stays ≤ `maxLag` (default 5,000,000) records

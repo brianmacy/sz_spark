@@ -1,12 +1,21 @@
 # Project Status
 
-**Date:** 2026-08-07
-**Branch:** bem_step2_complete — pushed; **PR #7 open** against `main`
+**Date:** 2026-08-08
+**Branch:** bem_tutorial_series (docs-only)
 **State:** M0–M16 + streaming ingest (PR #4) + the overlapping-batch feeder (PR #5) + the Kafka source
-(PR #6) are on `main`. This branch **completes Step 2** of the parallel-batch feeder: the RabbitMQ→Kafka
-bridge, the Delta source, and a broker end-to-end IntegrationTest. Implemented + unit-tested. Ask the
-user before pushing (autonomous mode: proceeding through prep → PR → merge-on-green per standing
-direction).
+(PR #6) + Step 2 completion — RabbitMQ→Kafka bridge, Delta source, broker IT (PR #7) — are all on
+`main`. This branch adds an **adopter-facing Guides tutorial series** (`docs/tutorial/`, 7 docs) —
+docs-only, no code change. Proceeding through prep → PR → merge-on-green per standing direction.
+
+## Current branch work (`bem_tutorial_series`)
+
+New: `docs/tutorial/README.md` (index + RabbitMQ-vs-Kafka decision guide) + `01-architecture`,
+`02-getting-started`, `03-rabbitmq-setup`, `04-kafka-setup`, `05-adopt-your-own-source`,
+`06-adapt-your-own-replication`; linked as the lead entry from `README.md`; CHANGELOG Docs entry.
+Diagram-first, concise, external-adopter voice; folds in the engine-parity / ack-on-persist-backpressure /
+shardRecords-sizing / 1-partition-operating-point / watermark lessons the reference docs scattered.
+
+## (Superseded) Step 2 work — merged in PR #7
 
 ## Current branch work (`bem_step2_complete`)
 

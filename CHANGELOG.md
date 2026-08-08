@@ -26,11 +26,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     name; monotonic (`refresh_seq`-guarded) MERGEs + tombstone cascade. The **`relationship` MERGE is
     column-wise `coalesce`** so a single-endpoint refresh never nulls the opposite direction's
     `match_key`/`rev_match_key`; the tombstone cascade uses **`MERGE ... WHEN MATCHED THEN DELETE`**
-    (OSS delta-spark rejects `IN (subquery)` in `DELETE`). Both proven by `EntityMartSinkIT` (a tagged
-    local Spark+Delta IT — no engine — that also confirms the `CLUSTER BY`+DV+CDF DDL runs on OSS
-    delta-spark 4.0.0).
-  - **`EntityMartSync`** — the glue driver: read the affected feed → dedup ids → GetCore → rows →
-    sink; advance the `_sync_state` watermark; `trigger=availableNow|loop` + `cadenceMs` cadence knob.
+    (OSS delta-spark rejects `IN (subquery)` in `DELETE`). Also (Phase 1.1, aligning to the Senzing
+    data-mart Entity Refresh Pattern): a **hash change-gate** (`selectChanged` drops entities whose
+    stored `entity_hash` is unchanged — "skip if unchanged" — so a re-resolution no-op writes nothing)
+    and **orphan-record reconcile** (a record DELETED from a surviving entity has its stale
+    `entity_record` row removed; a MOVE is re-keyed by the gaining entity's refresh). All proven by
+    `EntityMartSinkIT` (5 cases, a tagged local Spark+Delta IT — no engine — that also confirms the
+    `CLUSTER BY`+DV+CDF DDL runs on OSS delta-spark 4.0.0). The canonical `entity_hash` now uses
+    non-printable field/record separators (US/RS) to remove a boundary-collision risk.
+  - **`EntityMartSync`** — the glue driver: read the affected feed → dedup ids → GetCore → **change-gate**
+    → rows → sink; advance the `_sync_state` watermark; `trigger=availableNow|loop` + `cadenceMs` cadence.
 - **RabbitMQ→Kafka bridge** (`glue.MqToKafka`, Step 2b) — a plain-JVM competing consumer (the
   RabbitMQ→Kafka analog of the `MqToParquet` drainer) that moves records from the queue onto the topic
   `KafkaSource` reads, **throttled so the Spark consumer stays ≤ `maxLag` (default 5,000,000) records

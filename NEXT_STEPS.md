@@ -13,6 +13,34 @@ tombstone cascade uses `MERGE ... WHEN MATCHED THEN DELETE` (OSS delta-spark rej
 in `DELETE`). The IT also confirmed the `CLUSTER BY`+DV+CDF DDL runs on OSS delta-spark 4.0.0 (design
 §10 assumption — CONFIRMED).
 
+### Best-practice alignment vs the Senzing data-mart-replicator (from the Senzing-MCP)
+
+`reporting_guide topic=data_mart` + the "Advanced Real-time Replication" tutorial are the authority.
+We MATCH the pattern on: SZ_WITH_INFO→AFFECTED_ENTITIES feed; the **Entity Refresh Pattern**
+(re-fetch current state, apply idempotently — NOT ordered delta application, which the docs warn is
+impossible under parallel processing); explicit replication flags (not `*_DEFAULT_FLAGS`); tombstone on
+entity-not-found; **relationship normalization `lo<hi` storing BOTH `match_key` and `rev_match_key`**
+(the doc mandates both — our coalesce MERGE is exactly this); dedup affected ids per batch; denormalized
+tables (not JSON-blob-as-schema); canonical sorted-key hash for change detection.
+
+1. **✅ DONE (Phase 1.1) — hash change-gate wired.** `EntityMartSink.selectChanged` drops entities whose
+   stored `entity_hash` equals the fresh one before frames are built, so an unchanged re-resolution
+   writes nothing across all four tables (the doc's "skip if unchanged"). The canonical hash now uses
+   US/RS separators (collision-safety). Proven by `EntityMartSinkIT` (change-gate case).
+2. **✅ DONE (Phase 1.1) — orphan-record reconcile.** `reconcileDepartedRecords` deletes an
+   `entity_record` row when its record leaves a surviving entity (delete); a MOVE is re-keyed by the
+   gaining entity's refresh. Proven by `EntityMartSinkIT` (orphan case). ⚠ Phase-2 hardening: if the
+   gaining entity of a move is not in the SAME batch, the row is briefly deleted then re-inserted on that
+   entity's refresh (eventual consistency) — the reference avoids the transient via a `getRecord`-verify
+   sweep; add that if a consumer can't tolerate the brief gap. Also perf: the reconcile reads
+   `entity_record WHERE entity_id IN (batch ids)` — not cluster-pruned (clustering is on
+   `data_source, record_id, entity_id`); a secondary index or delta-based departed detection is a Phase-2
+   optimization.
+3. **Aggregate report tables are deliberately out of scope.** The reference also maintains `sz_dm_report`
+   (DSS/CSS/ESB/ERB) via +1/-1 deltas + a lease-based `sz_dm_pending_report` queue. We serve the
+   denormalized map and let Databricks aggregate (the doc's SQL patterns run over our tables). **Confirm
+   with customer** this is intended vs. wanting the 4 canonical pre-aggregated reports.
+
 ### Remaining (Phase 1.1 / Phase 2)
 1. **Runtime smoke on the fleet** — launch `EntityMartSync` against a live affected feed with
    `--packages io.delta:delta-spark_2.13:4.0.0` (write a `run-entity-mart.sh` on the NAS), point

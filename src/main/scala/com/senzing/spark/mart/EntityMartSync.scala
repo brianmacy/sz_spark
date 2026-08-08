@@ -76,7 +76,10 @@ object EntityMartSync extends SparkJob {
       .distinct()
 
     val results = GetCore.run(spark, ids, s"${staging.stripSuffix("/")}/get-$refreshSeq")
-    val frames = EntityMartRows.explode(spark, results)
+    // Change-gate: parse, drop entities whose stored hash is unchanged, then build frames from the rest
+    // (the Entity Refresh Pattern's "skip if unchanged"). Tombstones ride `results`, so GONE bypasses.
+    val changed = sink.selectChanged(EntityMartRows.parse(spark, results))
+    val frames = EntityMartRows.framesOf(spark, changed, results)
     sink.upsert(frames, refreshSeq)
     sink.quarantine(results.filter(_.kind == GetKind.Error).toDF(), refreshSeq)
     sink.writeState(StateRefreshSeq, refreshSeq.toString)

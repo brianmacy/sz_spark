@@ -8,7 +8,7 @@ import org.scalatest.funsuite.AnyFunSuite
 
 import com.senzing.spark.IntegrationTest
 import com.senzing.spark.mart.EntityMartRows._
-import com.senzing.spark.mart.LocalDeltaSink
+import com.senzing.spark.mart.{EntityMartRows, GetResult, LocalDeltaSink}
 
 /**
  * Executes the real [[LocalDeltaSink]] MERGE/DELETE SQL against a local OSS delta-spark table — the
@@ -123,5 +123,68 @@ final class EntityMartSinkIT extends AnyFunSuite with BeforeAndAfterAll {
     )
     sink.upsert(frames, refreshSeq = 3)
     assert(relationshipTable().collect().isEmpty, "GONE entity's relationship row cascaded away")
+  }
+
+  /**
+   * A [[ParsedEntity]] with a chosen hash and record set (no relationships) — change-gate/orphan
+   * input.
+   */
+  private def parsed(id: Long, hash: String, recs: Seq[(String, String)]): ParsedEntity = {
+    val records = recs.map { case (ds, rid) =>
+      EntityRecordRow(ds, rid, id, None, None, None, None, None)
+    }
+    ParsedEntity(
+      EntityRow(id, Some(s"E$id"), Some(records.size), Some(0), Seq.empty, Map.empty, hash),
+      records,
+      Seq.empty,
+      EntityDocRow(id, s"""{"id":$id}""", hash)
+    )
+  }
+
+  /** Build frames from parsed entities (no tombstones) and apply them through the real sink. */
+  private def applyParsed(sink: LocalDeltaSink, refreshSeq: Long, ps: ParsedEntity*): Unit = {
+    val spk = spark
+    import spk.implicits._
+    val frames = EntityMartRows.framesOf(spk, ps.toSeq.toDS(), spk.emptyDataset[GetResult])
+    sink.upsert(frames, refreshSeq)
+  }
+
+  private def recordIds(entityId: Long): Set[String] =
+    spark
+      .sql(s"SELECT record_id FROM delta.`$base/entity_record` WHERE entity_id = $entityId")
+      .collect()
+      .map(_.getString(0))
+      .toSet
+
+  test(
+    "change-gate: an unchanged entity is skipped; a changed / new entity passes",
+    IntegrationTest
+  ) {
+    val spk = spark
+    import spk.implicits._
+    val sink = new LocalDeltaSink(spark, base)
+    sink.initTables()
+    applyParsed(sink, refreshSeq = 10, parsed(1L, "H1", Seq(("DSg", "R1")))) // seed entity 1 @ H1
+
+    // Same entity + same hash ⇒ gated OUT (unchanged).
+    assert(sink.selectChanged(Seq(parsed(1L, "H1", Seq(("DSg", "R1")))).toDS()).isEmpty)
+    // Same entity, NEW hash ⇒ passes (content changed).
+    assert(sink.selectChanged(Seq(parsed(1L, "H2", Seq(("DSg", "R1")))).toDS()).count() == 1L)
+    // Brand-new entity (no stored hash) ⇒ passes.
+    assert(sink.selectChanged(Seq(parsed(999L, "Hx", Seq.empty)).toDS()).count() == 1L)
+  }
+
+  test(
+    "orphan record: a record deleted from a surviving entity is reconciled away",
+    IntegrationTest
+  ) {
+    val sink = new LocalDeltaSink(spark, base)
+    sink.initTables()
+    applyParsed(sink, refreshSeq = 20, parsed(2L, "Ha", Seq(("DSo", "A1"), ("DSo", "A2"))))
+    assert(recordIds(2L) == Set("A1", "A2"), "both records present after first refresh")
+
+    // Entity 2 refreshes with only A1 (A2 deleted from the entity) ⇒ A2's stale row must be removed.
+    applyParsed(sink, refreshSeq = 21, parsed(2L, "Hb", Seq(("DSo", "A1"))))
+    assert(recordIds(2L) == Set("A1"), "departed record A2 reconciled away")
   }
 }

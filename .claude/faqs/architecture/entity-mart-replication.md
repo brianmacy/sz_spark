@@ -71,3 +71,32 @@ blocks a `-n` include): `sbt 'set Test/testOptions := Seq()' "testOnly *EntityMa
 
 Assumed answers pending user confirm: O1 → §7.4 flags (no raw `JSON_DATA`/candidate features), O2 →
 pure-sz_spark Databricks target (feed complete by construction), O4 → configurable sync cadence.
+
+## Alignment with the Senzing data-mart-replicator (authority: Senzing-MCP `reporting_guide data_mart`)
+
+This design follows the documented **Entity Refresh Pattern**: SZ_WITH_INFO → AFFECTED_ENTITIES →
+dedup → `getEntity` current state → apply idempotently. **We deliberately re-fetch rather than apply the
+WITH_INFO delta** — the docs are explicit that under parallel processing you CANNOT know the order of
+operations, so ordered delta application would desync; re-fetching current state is order-independent
+(our `refresh_seq` guard adds protection against an out-of-order batch clobbering a newer write).
+
+MATCHES the reference: explicit replication flags (never `*_DEFAULT_FLAGS`); tombstone on
+entity-not-found; **`relationship` normalized `lo<hi` storing BOTH `match_key` + `rev_match_key`** (the
+doc mandates both since relationships are asymmetric — our coalesce MERGE is precisely this); dedup ids
+per batch; denormalized tables (NOT the "raw JSON blob as schema" anti-pattern); canonical sorted-key
+change hash.
+
+Reference gaps status (tracked in NEXT_STEPS): (1) **✅ hash change-gate wired** —
+`EntityMartSink.selectChanged` drops entities whose stored `entity_hash` is unchanged before frames are
+built ("skip if unchanged"); the canonical hash uses US/RS separators (collision-safety). (2) **✅
+orphan-record reconcile** — `reconcileDepartedRecords` removes an `entity_record` row when its record
+leaves a surviving entity (delete); a MOVE is re-keyed by the gaining entity's refresh. ⚠ Phase-2
+hardening: if the gaining entity of a move is not in the same batch the row is briefly deleted +
+re-inserted (eventual consistency) — the reference's `getRecord`-verify sweep avoids the transient. (3)
+the aggregate report tables (`sz_dm_report` DSS/CSS/ESB/ERB + deferred `sz_dm_pending_report`) remain out
+of scope — we serve the denormalized map for Databricks to aggregate. Both (1) and (2) are proven by
+`EntityMartSinkIT` (5 cases).
+
+Our column naming differs from the reference (`entity`/`entity_record`/`relationship` +
+`entity_id_lo`/`entity_id_hi` vs `sz_dm_entity`/`sz_dm_record`/`sz_dm_relation` + `related_id`); the
+reference's single `match_type` (AM/PM/DR/PR) we carry as `match_level_code` + `is_ambiguous`/`is_disclosed`.

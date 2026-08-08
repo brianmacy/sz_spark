@@ -180,7 +180,7 @@ object EntityMartRows {
     val sumPart = summary.toSeq.sortBy(_._1).map { case (k, v) => join(k, v.toString) }
     val canonical =
       (Seq(join("ID", entityId.toString), join("NAME", s(name))) ++
-        recPart ++ relPart ++ featPart ++ sumPart).mkString("")
+        recPart ++ relPart ++ featPart ++ sumPart).mkString("\u001e")
     sha256(canonical)
   }
 
@@ -195,9 +195,30 @@ object EntityMartRows {
    * per-micro-batch sizes here; a Phase-2 optimization would materialize `parsed` to a staging
    * write once (the SparkRecordOps read-back idiom) if the parse cost ever shows up.
    */
-  def explode(spark: SparkSession, results: Dataset[GetResult]): MartFrames = {
+  def explode(spark: SparkSession, results: Dataset[GetResult]): MartFrames =
+    framesOf(spark, parse(spark, results), results)
+
+  /**
+   * Parse the ENTITY results to their four-projection form (`entity_hash` included). This is the
+   * change-gate input: a sink can drop entities whose stored hash equals the fresh one before
+   * frames are built (see [[EntityMartSink.selectChanged]]).
+   */
+  def parse(spark: SparkSession, results: Dataset[GetResult]): Dataset[ParsedEntity] = {
     import spark.implicits._
-    val parsed: Dataset[ParsedEntity] = results.flatMap(r => parsedOf(r).toSeq)
+    results.flatMap(r => parsedOf(r).toSeq)
+  }
+
+  /**
+   * Build the four mart frames from an already-parsed (and possibly change-filtered) set, plus the
+   * tombstone frame from the GONE rows in `results` (tombstones are NOT change-gated — a GONE
+   * entity must always cascade).
+   */
+  def framesOf(
+      spark: SparkSession,
+      parsed: Dataset[ParsedEntity],
+      results: Dataset[GetResult]
+  ): MartFrames = {
+    import spark.implicits._
     MartFrames(
       entity = parsed.map(_.entity).toDF(),
       entityRecord = parsed.flatMap(_.records).toDF(),
@@ -343,7 +364,7 @@ object EntityMartRows {
 
   private def s(o: Option[String]): String = o.getOrElse("")
 
-  private def join(parts: String*): String = parts.mkString("")
+  private def join(parts: String*): String = parts.mkString("\u001f")
 
   private def sha256(str: String): String =
     MessageDigest

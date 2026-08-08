@@ -19,12 +19,17 @@ affected-entity feed (`WITH_INFO` → `AFFECTED_ENTITIES`) the feeders already e
   (Jackson transform → four frames + tombstones + canonical hash; 7-case `EntityMartRowsSpec`),
   `EntityMartSink`/`LocalDeltaSink` (monotonic MERGEs + tombstone cascade), `EntityMartSync` (glue
   driver). Default suite **129/0**; the `EntityMartSinkIT` local Spark+Delta IT **3/3**.
-- **Two fixes the IT caught + proved:** `relationship` MERGE is column-wise `coalesce` (a single
-  endpoint's refresh no longer nulls the opposite direction's `match_key`/`rev_match_key`); tombstone
-  cascade uses `MERGE ... WHEN MATCHED THEN DELETE` (OSS delta-spark rejects `IN (subquery)` DELETE).
-  The IT also **confirmed `CLUSTER BY`+DV+CDF DDL runs on OSS delta-spark 4.0.0** (design §10 assumption).
+- **Sink IT (5/5) caught + proved four things:** `relationship` MERGE is column-wise `coalesce` (a
+  single endpoint's refresh no longer nulls the opposite direction); tombstone cascade uses
+  `MERGE ... WHEN MATCHED THEN DELETE` (OSS delta-spark rejects `IN (subquery)` DELETE); the **hash
+  change-gate** skips unchanged entities; the **orphan-record reconcile** removes a record deleted from a
+  surviving entity. It also **confirmed `CLUSTER BY`+DV+CDF DDL runs on OSS delta-spark 4.0.0** (§10).
+- **Best-practice alignment (Senzing-MCP data-mart-replicator):** matches the Entity Refresh Pattern,
+  explicit flags, tombstoning, relationship-both-directions, dedup, denormalized tables, canonical hash +
+  change-gate + orphan handling. Deliberately out of scope: the `sz_dm_report` aggregate tables (Databricks
+  aggregates over our map — confirm with customer). See the entity-mart FAQ.
 - **Next (Phase 1.1 / 2, see NEXT_STEPS):** runtime smoke on the fleet (`run-entity-mart.sh` +
-  `--packages delta-spark`); wire the `entity_hash` change-gate (stored, not yet gating); `DatabricksUcSink`.
+  `--packages delta-spark`); `DatabricksUcSink`; Phase-2 orphan `getRecord`-verify + reconcile perf.
 - **Assumed answers to the plan's open questions** (confirm with user): O1 → the §7.4 flag set
   (no raw `JSON_DATA`/candidate features); O2 → build for the **pure-sz_spark Databricks** target
   (feed complete by construction); O4 → configurable sync cadence knob.

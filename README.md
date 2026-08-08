@@ -23,7 +23,9 @@ flowchart LR
   Straggler-free by design — see the [overlapping-batch feeder](docs/PARALLEL_BATCH_FEEDER.md).
 - **Replicate the results** — every add runs `WITH_INFO`, emitting a change feed of affected entities
   (plus a **dead-letter** feed), so you can materialize the resolved entity graph into Delta / a
-  warehouse / an online store in real time. See [adapt your own replication](docs/tutorial/06-adapt-your-own-replication.md).
+  warehouse / an online store in real time. Use the **built-in
+  [entity-mart](docs/tutorial/07-entity-mart-replication.md)** (resolved entities → Delta tables, local
+  or Databricks Unity Catalog) or [adapt your own](docs/tutorial/06-adapt-your-own-replication.md).
 - Opt-in **`getStats`** engine self-instrumentation to the driver log (`SZ_STATS` prefix).
 
 ## What you can build with it

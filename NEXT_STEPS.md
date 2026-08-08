@@ -1,12 +1,15 @@
 # Next Steps
 
-**Branch:** bem_entity_mart — entity-mart replication (Phase 1). Design of record:
-`~/.claude/plans/sz_spark_entity_map_delta_replication.md`.
+**Branch:** bem_mart_phase2 — entity-mart replication **Phase 2**. Design of record:
+`~/.claude/plans/sz_spark_entity_map_delta_replication.md`. Phase 1 + 1.1 are **MERGED** (PR #10).
 
-## NOW: PR #10 open — monitor CI + await review
+## NOW: Phase 2 — DatabricksUcSink + tutorial (this branch) → PR → merge
 
-`bem_entity_mart` is pushed as **PR #10** (base `main`, not auto-merged). Next action: watch
-`gh pr checks 10`; address any CI failure; merge is the user's call. Then start Phase 2 below.
+DONE on this branch: `DatabricksUcSink` (Unity-Catalog target — same `AbstractDeltaSink` MERGE/DELETE
+logic, UC `catalog.schema.\`table\`` naming), `EntityMartSync sink=local|uc` wiring, `DatabricksUcSinkSpec`
+(suite **133/0**), tutorial **Guide 07** (`docs/tutorial/07-entity-mart-replication.md`) +
+`docs/DATABRICKS.md` §Entity-mart. Next: PR this branch → monitor CI → merge. Remaining Phase-2/3 items
+(need live infra / new design) are below.
 
 ## Entity-mart replication — Phase 1 DONE (all in `mart/`)
 
@@ -47,20 +50,20 @@ tables (not JSON-blob-as-schema); canonical sorted-key hash for change detection
    is one pattern for one mart style — confirmed acceptable to serve the denormalized map and let
    Databricks aggregate over it (the doc's SQL patterns run against our exact shape). No action.
 
-### Remaining (Phase 1.1 / Phase 2)
-1. **Runtime smoke on the fleet** — launch `EntityMartSync` against a live affected feed with
-   `--packages io.delta:delta-spark_2.13:4.0.0` (write a `run-entity-mart.sh` on the NAS), point
-   `feed=` at a feeders' `output=$AFFECTED` dir, `mart=` at a local Delta base; verify rows land.
-2. **Wire the change-gate** — the `entity_hash` is computed + stored but the sink still writes every
-   affected entity each batch. Add `AND s.entity_hash <> t.entity_hash` to the `entity`/`entity_doc`
-   MERGEs (and give the concat hash a field delimiter first — current `mkString("")` has a
-   low-probability boundary-collision risk that only matters once the gate gates on it).
-3. **`DatabricksUcSink`** — subclass `AbstractDeltaSink`, override `locator` with UC 3-part names (O2's
-   Databricks-native path); the MERGE/DELETE SQL is unchanged.
-4. **Run `EntityMartSinkIT` in CI** — it's tag-excluded from `sbt test`; the build's global
-   `-l IntegrationTest` in `testOptions` also blocks a `-n` include, so run it with
-   `sbt 'set Test/testOptions := Seq()' "testOnly *EntityMartSinkIT"`. Consider a dedicated
-   `delta-it` tag so it can run in CI without a live engine (unlike the SZ_IT engine ITs).
+### Remaining (Phase 2 / 3) — DONE this branch: change-gate, orphan reconcile, DatabricksUcSink
+1. **Runtime smoke on the fleet** — launch `EntityMartSync` against a live affected feed
+   (`--packages io.delta:delta-spark_2.13:4.0.0`; `feed=` a feeders' `output=$AFFECTED` dir; `mart=` a
+   Delta base, or `sink=uc mart=catalog.schema staging=<Volume>`); verify rows land. Write a
+   `run-entity-mart.sh` on the NAS — **not run yet** (fleet busy draining the ~234M Kafka backlog).
+2. **Live-UC smoke for `DatabricksUcSink`** — validate the `catalog.schema` path on a real Databricks
+   cluster (locally unvalidatable; the shared `AbstractDeltaSink` logic is IT-proven and
+   `DatabricksUcSinkSpec` covers the naming, so this is the only unverified surface).
+3. **Orphan reconcile hardening** — `getRecord`-verify before an orphan delete (avoids a brief
+   cross-batch move transient); reconcile-read pruning (the `entity_id IN (...)` read isn't
+   cluster-pruned — clustering is on `data_source, record_id, entity_id`).
+4. **Run `EntityMartSinkIT` in CI** — tag-excluded from `sbt test`; the build's global `-l IntegrationTest`
+   also blocks a `-n` include, so run it with `sbt 'set Test/testOptions := Seq()' "testOnly *EntityMartSinkIT"`.
+   Consider a dedicated `delta-it` tag so CI runs it without a live engine.
 
 **Confirm with user** (plan open questions, assumed): O1 → §7.4 flags; O2 → pure-sz_spark Databricks
 target; O4 → configurable cadence.

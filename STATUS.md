@@ -1,14 +1,13 @@
 # Project Status
 
 **Date:** 2026-08-08
-**Branch:** bem_entity_mart — **PR #10** (open, against `main`, NOT auto-merged; awaiting review + CI)
-**State:** M0–M16 + streaming ingest (#4) + overlapping-batch feeder (#5) + Kafka source (#6) +
-Step-2 completion / bridge+Delta (#7) + the Guides tutorial series (#8) + the README front door (#9)
-are all on `main`. This branch starts the **entity-mart replication** (the customer's real-time
-Databricks export). Also this session: the `.142` parquet path was **cut over to Kafka** (operational,
-on the NAS — not git).
+**Branch:** bem_mart_phase2 — entity-mart **Phase 2** (`DatabricksUcSink` + tutorial Guide 07); PR pending.
+**State:** entity-mart replication **Phase 1 + 1.1 MERGED to `main`** (PR #10). This branch (`bem_mart_phase2`)
+adds the **Unity-Catalog sink target** so the same jar serves the mart to Databricks, plus the tutorial +
+Databricks deploy docs. Default suite **133/0**, `EntityMartSinkIT` 5/5. Separately landed this session:
+the `.142` Kafka cutover (operational, NAS) and the dbperf PG18 work (dbperf PR #15, merged).
 
-## Entity-mart replication (this branch — Phase 1, in progress)
+## Entity-mart replication — Phase 1 MERGED (#10); Phase 2 on this branch
 
 Design of record: `~/.claude/plans/sz_spark_entity_map_delta_replication.md`. Driven by the
 affected-entity feed (`WITH_INFO` → `AFFECTED_ENTITIES`) the feeders already emit → per affected id

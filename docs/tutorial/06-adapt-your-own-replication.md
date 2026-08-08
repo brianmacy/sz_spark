@@ -59,11 +59,12 @@ projection and key.
 - **On Databricks**, the read (Auto Loader / Delta CDF) and low-latency serving (DLT / online tables)
   are native; the replication logic above stays the same.
 
-## Reference implementation
+## Reference implementation — it's built in
 
-A batteries-included replication of all three shapes to Delta is a separate deliverable (design in the
-project plans). Until it lands, the pattern above — feed → `get_entity` → keyed upsert — is complete and
-production-shaped; wire it to your store.
+You don't have to build this from scratch: **[Guide 07 · The entity-mart](07-entity-mart-replication.md)**
+implements all three shapes to Delta (local *or* Databricks Unity Catalog) with skip-if-unchanged,
+tombstones, both relationship directions, and orphan handling — the same jar, one class. Point it at your
+feed to use it, or read its `mart/` package as the worked example for your own store.
 
 ---
 

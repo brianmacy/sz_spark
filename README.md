@@ -1,21 +1,48 @@
 # sz_spark
 
-Load your data into **Senzing** entity resolution from **Spark / Databricks**, at scale, against a
-co-located SQL database (PostgreSQL / MSSQL / MySQL). The Senzing V4 SDK and its native libraries are
-packaged into a single self-extracting **FAT jar** and run as ordinary Spark jobs — this repo is a
-runnable reference you build once and deploy as a container.
+**Run [Senzing](https://senzing.com) entity resolution at scale on Apache Spark — from any record
+source, into any datastore, with the resolved entities replicated wherever you need them.**
 
-It provides:
+sz_spark packages the Senzing V4 SDK and its native libraries into one self-extracting **FAT jar** that
+runs as ordinary Spark jobs — no `/opt/senzing` install on your cluster. It's a runnable reference
+implementation: a small core (the engine on Spark) between two seams you adapt — where records come
+**in**, and where resolved entities go **out**.
 
-- **Batch jobs** — **add/update**, **delete**, and **search** (each writes an output DataFrame plus an
-  error DataFrame), and **redo** as a scheduled, parallel job.
-- **A streaming ingest path** — a durable parquet inbox drained from a message queue → a long-running
-  Structured Streaming feeder → the engine, with a **dead-letter sink** for failed records.
-- **A `getStats` sampler** — an opt-in plugin that periodically emits the engine's self-instrumentation
-  to the driver log under the `SZ_STATS` prefix.
+```mermaid
+flowchart LR
+  src["Your source<br/>Kafka · RabbitMQ · Delta · files"] -->|RecordSource| eng["Senzing engine<br/>on Spark"]
+  eng -->|affected-entity feed| store["Your entity store<br/>Delta · warehouse · online"]
+```
 
-Concurrency is controlled entirely by Spark executor/worker count — there is no "threads per worker"
-knob; each task drives a shared per-executor-JVM engine single-threaded.
+## What it does
+
+- **Resolve records at scale** — add / update / delete / search, plus redo, as Spark jobs. One engine
+  per executor JVM; concurrency comes from Spark parallelism alone (no "threads per worker" knob).
+- **Ingest from anywhere** — a pluggable `RecordSource` seam: **RabbitMQ** (via a durable parquet
+  inbox), **Kafka**, **Delta**, or [your own source](docs/tutorial/05-adopt-your-own-source.md).
+  Straggler-free by design — see the [overlapping-batch feeder](docs/PARALLEL_BATCH_FEEDER.md).
+- **Replicate the results** — every add runs `WITH_INFO`, emitting a change feed of affected entities
+  (plus a **dead-letter** feed), so you can materialize the resolved entity graph into Delta / a
+  warehouse / an online store in real time. See [adapt your own replication](docs/tutorial/06-adapt-your-own-replication.md).
+- Opt-in **`getStats`** engine self-instrumentation to the driver log (`SZ_STATS` prefix).
+
+## What you can build with it
+
+The engine core is identical across all three — only the source and sink adapters change:
+
+| Environment | Ingest | Where results land | What it looks like |
+|---|---|---|---|
+| **On-prem (POSIX)** | RabbitMQ → parquet inbox → engine | Co-located SQL repo (PostgreSQL / MSSQL / MySQL) + Delta/warehouse | [RabbitMQ setup](docs/tutorial/03-rabbitmq-setup.md) · [on-prem tutorial](docs/tutorials/spark-onprem.md) |
+| **Streaming / lakehouse** | Kafka (or Delta) → engine | Object storage, Delta tables | [Kafka setup](docs/tutorial/04-kafka-setup.md) · [AWS EMR tutorial](docs/tutorials/aws-emr.md) |
+| **Databricks-native** | Auto Loader / Kafka / Delta | Unity Catalog, online/synced tables | [Databricks reference](docs/DATABRICKS.md) · [Databricks tutorial](docs/tutorials/databricks.md) |
+
+## Start here
+
+**New to sz_spark?** → read the **[Guides](docs/tutorial/README.md)** — a short, progressive series:
+[architecture](docs/tutorial/01-architecture.md) → [getting started](docs/tutorial/02-getting-started.md)
+→ the [RabbitMQ](docs/tutorial/03-rabbitmq-setup.md) and [Kafka](docs/tutorial/04-kafka-setup.md) setups
+→ [adopting your own source](docs/tutorial/05-adopt-your-own-source.md) and
+[replication](docs/tutorial/06-adapt-your-own-replication.md). Then use the build + ops quick start below.
 
 ---
 

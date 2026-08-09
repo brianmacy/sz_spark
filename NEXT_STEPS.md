@@ -1,15 +1,21 @@
 # Next Steps
 
-**Branch:** bem_mart_phase2 — entity-mart replication **Phase 2**. Design of record:
-`~/.claude/plans/sz_spark_entity_map_delta_replication.md`. Phase 1 + 1.1 are **MERGED** (PR #10).
+**Branch:** main — entity-mart replication **Phase 1 + 1.1 (PR #10) and Phase 2 (PR #11) MERGED**. Design
+of record: `~/.claude/plans/sz_spark_entity_map_delta_replication.md`.
 
-## NOW: Phase 2 — DatabricksUcSink + tutorial (this branch) → PR → merge
+## NOW: Phase 3 — live-infra validation (all code + docs are merged)
 
-DONE on this branch: `DatabricksUcSink` (Unity-Catalog target — same `AbstractDeltaSink` MERGE/DELETE
-logic, UC `catalog.schema.\`table\`` naming), `EntityMartSync sink=local|uc` wiring, `DatabricksUcSinkSpec`
-(suite **133/0**), tutorial **Guide 07** (`docs/tutorial/07-entity-mart-replication.md`) +
-`docs/DATABRICKS.md` §Entity-mart. Next: PR this branch → monitor CI → merge. Remaining Phase-2/3 items
-(need live infra / new design) are below.
+Phase 1 + 2 are on `main`: `EntityMartSchema`, `GetCore`, `EntityMartRows`, `EntityMartSink`/
+`LocalDeltaSink`, `EntityMartSync`, `DatabricksUcSink` (UC target), the change-gate + orphan reconcile,
+tutorial **Guide 07** + `docs/DATABRICKS.md` §Entity-mart. Suite **133/0**, `EntityMartSinkIT` 5/5. The
+remaining work needs LIVE infrastructure, not code — the concrete next actions:
+1. **Live-UC smoke** of `EntityMartSync sink=uc mart=<catalog.schema> staging=<Volume>` on a real
+   Databricks cluster (locally unvalidatable; `DatabricksUcSinkSpec` covers the naming, the shared
+   `AbstractDeltaSink` logic is IT-proven).
+2. **Fleet runtime smoke** of `EntityMartSync` against a live affected feed (write a `run-entity-mart.sh`
+   on the NAS) — deferred: the fleet is draining the ~234M Kafka backlog.
+
+Further Phase-3 hardening items are in the list below.
 
 ## Entity-mart replication — Phase 1 DONE (all in `mart/`)
 

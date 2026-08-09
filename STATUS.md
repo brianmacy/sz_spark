@@ -1,13 +1,15 @@
 # Project Status
 
-**Date:** 2026-08-08
-**Branch:** bem_mart_phase2 — entity-mart **Phase 2** (`DatabricksUcSink` + tutorial Guide 07); PR pending.
-**State:** entity-mart replication **Phase 1 + 1.1 MERGED to `main`** (PR #10). This branch (`bem_mart_phase2`)
-adds the **Unity-Catalog sink target** so the same jar serves the mart to Databricks, plus the tutorial +
-Databricks deploy docs. Default suite **133/0**, `EntityMartSinkIT` 5/5. Separately landed this session:
-the `.142` Kafka cutover (operational, NAS) and the dbperf PG18 work (dbperf PR #15, merged).
+**Date:** 2026-08-09
+**Branch:** main — entity-mart replication **Phase 1 + 1.1 (PR #10) and Phase 2 (PR #11) both MERGED**.
+**State:** the entity-mart is complete through Phase 2 on `main`: `EntityMartSchema`, `GetCore`,
+`EntityMartRows`, `EntityMartSink`/`LocalDeltaSink`, `EntityMartSync`, `DatabricksUcSink` (Unity-Catalog
+target), + the change-gate/orphan-reconcile, tutorial **Guide 07**, and Databricks deploy docs. Default
+suite **133/0**, `EntityMartSinkIT` 5/5. Remaining work is **Phase 3 — live-infra validation** (needs a
+real Databricks cluster / the fleet, not code); see NEXT_STEPS. Separately landed this session: the `.142`
+Kafka cutover (operational, NAS) and the dbperf PG18 work (dbperf PR #15, merged).
 
-## Entity-mart replication — Phase 1 MERGED (#10); Phase 2 on this branch
+## Entity-mart replication — Phase 1 (PR #10) + Phase 2 (PR #11) MERGED
 
 Design of record: `~/.claude/plans/sz_spark_entity_map_delta_replication.md`. Driven by the
 affected-entity feed (`WITH_INFO` → `AFFECTED_ENTITIES`) the feeders already emit → per affected id

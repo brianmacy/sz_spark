@@ -44,6 +44,19 @@ import com.senzing.spark.work.InputRecord
  *
  * `trigger`: `default` = long-running (poll forever); `availableNow` = drain then exit after
  * `emptyMs` idle (tests / scheduled batch).
+ *
+ * SELF-HEALING (opt-in — both default OFF so callers/tests are unchanged): when the failure is the
+ * CLUSTER rather than one chunk, silently swallowing per-chunk failures is wrong — the committed
+ * watermark freezes while the cursor races ahead, and the feeder consumes nothing until a human
+ * restart. So the engine can ABORT its worker loop and throw
+ * [[FeederSupervisor.ClusterUnhealthyException]] out of `run`, which the [[FeederSupervisor]] then
+ * recovers by resubmitting a fresh attempt from the committed offset. Two abort triggers:
+ *   - `clusterFailureThreshold` (>0): that many CONSECUTIVE chunk failures — a single poison chunk
+ *     never trips it (the next success resets the counter); an executor loss that fails every job
+ *     does.
+ *   - `progressTimeoutMs` (>0): a watchdog — chunks are in flight but NONE has committed for the
+ *     whole window (a silent scheduler hang that throws nothing). Set it well above the slowest
+ *     single-batch time so a legitimate straggler never trips it (other workers keep committing).
  */
 object OverlappingBatchEngine {
 
@@ -76,7 +89,9 @@ object OverlappingBatchEngine {
       recordsPerBatch: Int,
       maxUnprocessedBatches: Int,
       trigger: String,
-      emptyMs: Long
+      emptyMs: Long,
+      clusterFailureThreshold: Int = 0,
+      progressTimeoutMs: Long = 0L
   ): Stats = {
     require(recordsPerBatch > 0, s"recordsPerBatch must be > 0, was $recordsPerBatch")
     require(
@@ -99,6 +114,18 @@ object OverlappingBatchEngine {
     val lastClaimMs = new AtomicLong(System.currentTimeMillis())
     val cursor = new AtomicReference[String](source.initialCursor)
 
+    // Self-healing bookkeeping (all no-ops unless the corresponding threshold is enabled).
+    val consecutiveFailures = new AtomicLong(0) // reset by any success; a burst ⇒ cluster is down
+    val inFlight = new AtomicLong(0) // chunks claimed and being processed right now
+    val lastProgressMs = new AtomicLong(System.currentTimeMillis()) // last SUCCESSFUL commit
+    val abortCause = new AtomicReference[Throwable](null)
+
+    def triggerAbort(cause: Throwable): Unit =
+      if (abortCause.compareAndSet(null, cause)) {
+        running.set(false)
+        logErr(s"ABORT (supervisor will recover): ${cause.getMessage}")
+      }
+
     // Serialized claim: advance the cursor atomically so watermark sources stay ordered. Claiming is
     // metadata-only, so this lock is not on the hot (per-record) path.
     def claim(): Option[Chunk] = source.synchronized {
@@ -110,6 +137,7 @@ object OverlappingBatchEngine {
 
     def processOne(chunk: Chunk): Unit = {
       val staging = new Path(stagingBase, sanitize(chunk.bounds)).toString
+      inFlight.incrementAndGet()
       try {
         // 1 partition (the default operating point) ⇒ NO repartition/shuffle: the batch is a single
         // task that commits on its own, so a straggler holds exactly one slot and blocks nothing.
@@ -120,14 +148,29 @@ object OverlappingBatchEngine {
         if (output.nonEmpty) ShardIo.writeSingleFile(spark, result.good, output, "af")
         source.commit(chunk.bounds) // chunk is in the engine — dispose / advance watermark
         ShardIo.deleteQuietly(ShardIo.fileSystem(spark, staging), new Path(staging))
+        consecutiveFailures.set(
+          0
+        ) // a success means the cluster is alive — clear the run of failures
+        lastProgressMs.set(System.currentTimeMillis())
         val n = processed.incrementAndGet()
         log(s"committed chunk ${chunk.bounds} ($n done, ${failed.get()} failed)")
       } catch {
         case NonFatal(e) =>
           // NOT committed → source reclaims/replays it on restart. Never dropped.
           failed.incrementAndGet()
+          val streak = consecutiveFailures.incrementAndGet()
           logErr(s"chunk ${chunk.bounds} NOT committed (source will reclaim/replay on restart): $e")
-      }
+          // A run-long BURST of consecutive failures is a cluster-level problem, not one bad chunk:
+          // abort so the supervisor can wait for executors and resubmit from the committed offset.
+          if (clusterFailureThreshold > 0 && streak >= clusterFailureThreshold)
+            triggerAbort(
+              new FeederSupervisor.ClusterUnhealthyException(
+                s"$streak consecutive chunk failures (>= threshold $clusterFailureThreshold) — " +
+                  s"cluster appears down; last failure: $e",
+                e
+              )
+            )
+      } finally inFlight.decrementAndGet()
     }
 
     def workerLoop(idx: Int): Unit = {
@@ -146,23 +189,74 @@ object OverlappingBatchEngine {
         }
     }
 
+    // Progress watchdog: chunks are IN FLIGHT but NONE has committed for the whole window ⇒ a silent
+    // scheduler hang (throws nothing, so the failure-streak path can't see it). Only when inFlight>0,
+    // so genuine end-of-input idle (inFlight==0) never trips it.
+    def startWatchdog(): Option[Thread] =
+      if (progressTimeoutMs <= 0) None
+      else {
+        val checkMs = math.max(500L, math.min(progressTimeoutMs, 5000L))
+        val t = new Thread(
+          () =>
+            try
+              while (running.get() && abortCause.get() == null) {
+                Thread.sleep(checkMs)
+                val stalledMs = System.currentTimeMillis() - lastProgressMs.get()
+                if (running.get() && inFlight.get() > 0 && stalledMs >= progressTimeoutMs)
+                  triggerAbort(
+                    new FeederSupervisor.ClusterUnhealthyException(
+                      s"progress watchdog: no committed chunk in ${stalledMs}ms " +
+                        s"(>= ${progressTimeoutMs}ms) while ${inFlight.get()} chunk(s) in flight — " +
+                        "silent cluster hang"
+                    )
+                  )
+              }
+            catch { case _: InterruptedException => () },
+          "feeder-progress-watchdog"
+        )
+        t.setDaemon(true)
+        t.start()
+        Some(t)
+      }
+
     log(
       s"starting: recordsPerBatch=$recordsPerBatch maxUnprocessedBatches=$maxUnprocessedBatches " +
-        s"(=> $partitionsPerChunk partitions/batch, ${maxUnprocessedBatches * partitionsPerChunk} pending) trigger=$trigger"
+        s"(=> $partitionsPerChunk partitions/batch, ${maxUnprocessedBatches * partitionsPerChunk} pending) trigger=$trigger" +
+        s" clusterFailureThreshold=$clusterFailureThreshold progressTimeoutMs=$progressTimeoutMs"
     )
+    val watchdog = startWatchdog()
     val pool = Executors.newFixedThreadPool(concurrency)
-    try {
-      val workers =
-        (0 until concurrency).map(i =>
-          pool.submit(new Runnable { def run(): Unit = workerLoop(i) })
-        )
-      workers.foreach(_.get()) // blocks forever for trigger=default; until drained for availableNow
-    } finally {
-      pool.shutdown()
+    val workers =
+      (0 until concurrency).map(i => pool.submit(new Runnable { def run(): Unit = workerLoop(i) }))
+    try
+      // Supervise the workers rather than blocking on get(): an abort can flip `running` to false
+      // while a worker is BLOCKED in a hung Spark job, and only shutdownNow() (interrupt) frees it.
+      while (running.get() && workers.exists(w => !w.isDone)) Thread.sleep(IdlePauseMs)
+    finally {
+      running.set(false)
+      watchdog.foreach(_.interrupt())
+      // Clean drain (availableNow / trigger=default with no abort): let workers observe running=false
+      // and exit their loops gracefully — never interrupt a worker mid-commit. Only an ABORT (a hung
+      // worker, or a failure burst we are recovering from anyway) forces an interrupt to break free.
+      if (abortCause.get() != null) pool.shutdownNow() else pool.shutdown()
       pool.awaitTermination(1, TimeUnit.MINUTES)
+    }
+    // Surface any unexpected worker exception (processOne swallows NonFatal, so this is rare) as an
+    // abort cause too, without clobbering a watchdog/streak cause that was set first.
+    workers.foreach { w =>
+      if (w.isDone && !w.isCancelled)
+        try w.get()
+        catch {
+          case e: java.util.concurrent.ExecutionException =>
+            abortCause.compareAndSet(null, Option(e.getCause).getOrElse(e))
+          case _: java.util.concurrent.CancellationException | _: InterruptedException => ()
+        }
     }
     val stats = Stats(processed.get(), failed.get())
     log(s"exiting: processedChunks=${stats.processedChunks} failedChunks=${stats.failedChunks}")
+    // If we aborted for a cluster-level reason, propagate so the supervisor recovers (resubmits from
+    // the committed offset). A clean drain (availableNow) leaves abortCause null and returns stats.
+    Option(abortCause.get()).foreach(t => throw t)
     stats
   }
 }

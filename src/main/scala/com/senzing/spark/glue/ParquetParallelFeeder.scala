@@ -3,7 +3,9 @@ package com.senzing.spark.glue
 import org.apache.hadoop.fs.Path
 
 import com.senzing.spark.core.AddCore
+import com.senzing.spark.glue.FeederSupervisor.SupervisionConfig
 import com.senzing.spark.jobs.SparkJob
+import com.senzing.spark.work.Backoff
 
 /**
  * Thin main wiring a [[RecordSource]] into the source-agnostic [[OverlappingBatchEngine]] with the
@@ -22,7 +24,11 @@ import com.senzing.spark.jobs.SparkJob
  * (`earliest`|`latest`|<number>, cold start only), `minPartitions` (read fan-out, 1); delta source:
  * `tablePath`, `checkpoint`, `startingVersion` (`latest`|<number>, cold start only),
  * `versionsPerBatch` (1); engine: `staging`, `deadLetter` (opt), `output` (opt), `recordsPerBatch`
- * (1000), `maxUnprocessedBatches` (200), `trigger` (`default`|`availableNow`), `emptyMs` (30000).
+ * (1000), `maxUnprocessedBatches` (200), `trigger` (`default`|`availableNow`), `emptyMs` (30000);
+ * auto-recovery (executor/worker loss self-healing — see [[FeederSupervisor]]): `minExecutors` (1),
+ * `recoveryMaxAttempts` (0 = unbounded), `recoveryBackoffBaseMs` (5000), `recoveryBackoffMaxMs`
+ * (120000), `executorWaitMs` (300000), `clusterFailureThreshold` (0 = off; consecutive chunk
+ * failures that trigger a resubmit), `progressTimeoutMs` (0 = off; silent-hang watchdog window).
  *
  * DEFAULT OPERATING POINT: `recordsPerBatch=1000` ⇒ ONE partition/batch (independent commit,
  * straggler = one slot) and `maxUnprocessedBatches=200` ≈ slot count + buffer (so a straggler costs
@@ -114,17 +120,42 @@ object ParquetParallelFeeder extends SparkJob {
     )
     try {
       val source = buildSource(spark, m, recordsPerBatch)
-      OverlappingBatchEngine.run(
+      // Self-healing across executor/worker loss: the engine ABORTS on a cluster-level signal
+      // (a burst of `clusterFailureThreshold` consecutive failures, or the `progressTimeoutMs`
+      // watchdog) and the supervisor waits for executors, backs off, and resubmits a fresh engine
+      // run — which re-reads the committed offset from the source. Both engine thresholds default 0
+      // (off); enable them via job args (the run script wires them). Resume is AT-LEAST-ONCE (a few
+      // in-flight batches re-read on retry; add_record is idempotent on re-add).
+      val supervision = SupervisionConfig(
+        minExecutors = m.getOrElse("minExecutors", "1").toInt,
+        maxAttempts = m.getOrElse("recoveryMaxAttempts", "0").toInt, // 0 = never give up
+        backoff = Backoff(
+          baseMs = m.getOrElse("recoveryBackoffBaseMs", "5000").toLong,
+          maxMs = m.getOrElse("recoveryBackoffMaxMs", "120000").toLong,
+          budgetMs = Long.MaxValue
+        ),
+        executorWaitMs = m.getOrElse("executorWaitMs", "300000").toLong
+      )
+      val clusterFailureThreshold = m.getOrElse("clusterFailureThreshold", "0").toInt
+      val progressTimeoutMs = m.getOrElse("progressTimeoutMs", "0").toLong
+      FeederSupervisor.run(
         spark,
-        source,
-        process = (ds, staging) => AddCore.run(spark, ds, runId, staging),
-        stagingBase = m.getOrElse("staging", "staging"),
-        deadLetter = m.getOrElse("deadLetter", ""),
-        output = m.getOrElse("output", ""),
-        recordsPerBatch = recordsPerBatch,
-        maxUnprocessedBatches = m.getOrElse("maxUnprocessedBatches", "200").toInt,
-        trigger = m.getOrElse("trigger", "default"),
-        emptyMs = m.getOrElse("emptyMs", "30000").toLong
+        supervision,
+        engineAttempt = () =>
+          OverlappingBatchEngine.run(
+            spark,
+            source,
+            process = (ds, staging) => AddCore.run(spark, ds, runId, staging),
+            stagingBase = m.getOrElse("staging", "staging"),
+            deadLetter = m.getOrElse("deadLetter", ""),
+            output = m.getOrElse("output", ""),
+            recordsPerBatch = recordsPerBatch,
+            maxUnprocessedBatches = m.getOrElse("maxUnprocessedBatches", "200").toInt,
+            trigger = m.getOrElse("trigger", "default"),
+            emptyMs = m.getOrElse("emptyMs", "30000").toLong,
+            clusterFailureThreshold = clusterFailureThreshold,
+            progressTimeoutMs = progressTimeoutMs
+          )
       )
     } finally spark.stop()
   }

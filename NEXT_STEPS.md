@@ -1,6 +1,20 @@
 # Next Steps
 
-**Branch:** main — entity-mart replication **Phase 1 + 1.1 (PR #10) and Phase 2 (PR #11) MERGED**. Design
+**Branch:** `bem_feeder_autorecovery` (PR **#13**, `ed97da2`) → squash-merged into `main`. Feeder
+auto-recovery (`FeederSupervisor`) is unit-validated (139/0) but NOT yet run against the live engine.
+
+## NOW: validate + deploy feeder auto-recovery on `.142` (PR #13)
+
+1. **Rebuild the `.142` feeder jar** to carry `FeederSupervisor` (currently `.142` relies only on
+   Spark-native `--conf` recovery; the merged supervisor is NOT yet in the deployed jar). Use the
+   arena-engine `IMAGE=` override — a run-script without it reverts `.142` off the arena engine.
+2. **Live-engine IT** — the `/prep` FAST suite is mocked (Mockito, no engine); exercise the supervisor
+   against the real engine on `.142` (kill an executor mid-batch, confirm the run restarts from the
+   committed offset with no lost/duplicated records beyond at-least-once).
+
+## Entity-mart replication — Phase 3 live-infra validation (prior work, on `main`)
+
+**Prior:** entity-mart **Phase 1 + 1.1 (PR #10) and Phase 2 (PR #11) MERGED**. Design
 of record: `~/.claude/plans/sz_spark_entity_map_delta_replication.md`.
 
 ## NOW: Phase 3 — live-infra validation (all code + docs are merged)

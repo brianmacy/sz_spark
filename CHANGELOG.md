@@ -6,6 +6,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Feeder auto-recovery — `FeederSupervisor` (PR #13)** — the parallel-batch feeder self-heals from
+  executor/worker loss: on a failed micro-batch the supervisor restarts the run, which re-reads from
+  the committed offset/watermark, preserving at-least-once semantics (a dropped executor no longer
+  strands the feed). `FeederSupervisor` wraps `OverlappingBatchEngine`/`ParquetParallelFeeder`; covered
+  by `FeederSupervisorSpec` (mocked plumbing, no engine). Docs: `docs/PARALLEL_BATCH_FEEDER.md`
+  §Auto-recovery. Default unit suite **139/0**. ⚠ NOT yet exercised against the live engine on `.142`
+  (deploy/IT validation pending — see NEXT_STEPS).
 - **Entity-mart replication — Phase 2: Databricks / Unity Catalog target** — `mart.DatabricksUcSink`
   extends `AbstractDeltaSink`, reusing every line of the MERGE/DELETE/change-gate/reconcile logic and
   changing ONLY table naming to a UC three-part `` catalog.schema.`table` `` (the table part

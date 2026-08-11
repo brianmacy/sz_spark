@@ -57,6 +57,36 @@ cloud object storage); the watermark flavor fixes it and is how the same engine 
 - **Per-chunk staging:** `AddCore.run` writes `staging/<bounds>` (a shared path would clobber under
   concurrency); cleaned after commit.
 - **Memory-bounded:** ≤ K chunks × `filesPerChunk` records in flight; references dropped per chunk.
+- **Self-heals across executor/worker loss** (opt-in — see below).
+
+## Auto-recovery — surviving executor/worker loss without a manual restart
+The never-drop guarantee above only re-reads uncommitted chunks *on a restart*. A standalone-cluster
+**executor loss** ("all executors lost" / repeated `SparkException`s / a silent scheduler hang) is not
+one poison chunk: every in-flight job fails or blocks at once, the committed watermark **freezes**, and
+the driver either spins failing every chunk (racing the cursor ahead of the frozen watermark) or blocks
+forever. Observed 2026-08-09: a `.142` worker restart left the feeder consuming **nothing** until a human
+restarted it. [`FeederSupervisor`](../src/main/scala/com/senzing/spark/glue/FeederSupervisor.scala) makes
+this automatic:
+1. **Engine aborts on a cluster signal.** [`OverlappingBatchEngine`](../src/main/scala/com/senzing/spark/glue/OverlappingBatchEngine.scala)
+   throws `ClusterUnhealthyException` out of `run` when either (a) `clusterFailureThreshold` **consecutive**
+   chunk failures occur (one bad chunk never trips it — the next success resets the counter; a dead cluster
+   fails every job), or (b) the `progressTimeoutMs` watchdog sees chunks in flight but **no commit** for the
+   whole window (a hang that throws nothing). Both default **off**, so tests/other callers are unchanged.
+2. **Supervisor waits, backs off, resubmits.** `FeederSupervisor.supervise` catches that (and raw Spark
+   executor-loss exceptions), logs loudly, polls `SparkContext.statusTracker.getExecutorInfos` until
+   `minExecutors` register, waits a bounded jittered [`Backoff`](../src/main/scala/com/senzing/spark/work/Backoff.scala),
+   then re-runs the engine. A fresh run re-reads `RecordSource.initialCursor` = the committed offset.
+3. **Standalone-cluster knobs** in `run-feeder-kafka.sh` make Spark wait for/re-acquire executors instead
+   of failing fast: `spark.scheduler.minRegisteredResourcesRatio` / `maxRegisteredResourcesWaitingTime`,
+   `spark.task.maxFailures`, `spark.executor.heartbeatInterval`, `spark.network.timeout`.
+
+**Offset semantics — at-least-once, by design.** Recovery resumes from the last durably-committed offset
+([`OffsetWatermark`](../src/main/scala/com/senzing/spark/glue/OffsetWatermark.scala)) — never from the
+beginning, never skipping a gap. The handful of in-flight-but-uncommitted batches at the moment of failure
+are **re-read** on the retry. `add_record` is idempotent on re-add (a resolved record re-adds as a cheap
+no-op), so at-least-once is correct here; exactly-once is neither offered nor needed. Set `progressTimeoutMs`
+**well above** the slowest single-batch time (~250s at 1 partition/batch) so a legitimate straggler never
+trips the watchdog — other workers keep committing, so a real hang means *nothing* commits at all.
 
 ## Job args (`glue.ParquetParallelFeeder`)
 | Arg | Meaning | Default |
@@ -79,6 +109,12 @@ cloud object storage); the watermark flavor fixes it and is how the same engine 
 | `trigger` | `default` (long-running) or `availableNow` (drain then exit) | `default` |
 | `emptyMs` | idle window before `availableNow` exits | `30000` |
 | `runId` | ties affected-entity rows to a run | `run` |
+| `clusterFailureThreshold` | consecutive chunk failures that abort→resubmit (auto-recovery); `0` = off | `0` |
+| `progressTimeoutMs` | silent-hang watchdog: abort→resubmit if no commit this long while chunks in flight; `0` = off | `0` |
+| `minExecutors` | resubmit only once ≥ this many executors are registered | `1` |
+| `recoveryMaxAttempts` | total engine attempts before giving up; `0` = unbounded (never give up) | `0` |
+| `recoveryBackoffBaseMs` / `recoveryBackoffMaxMs` | jittered backoff between resubmits (max caps the delay) | `5000` / `120000` |
+| `executorWaitMs` | how long each resubmit polls for executors before proceeding anyway | `300000` |
 
 **Operating point — 1 partition per batch, K ≈ slot count (Rust-consumer emulation).** With
 `recordsPerBatch=1000` each batch is a single task that commits on its own, so a huge-entity

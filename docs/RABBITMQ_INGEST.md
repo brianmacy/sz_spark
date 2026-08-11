@@ -2,8 +2,10 @@
 
 **Status:** Stage 2 (the Structured Streaming feeder, `glue.ParquetStreamFeeder`) is **implemented +
 unit-tested**, including the dead-letter/output sinks (see [`DEAD_LETTER.md`](DEAD_LETTER.md)); the
-Stage 1 drainer is a standalone plain-JVM consumer (design below). Not yet run on a multi-node
-cluster.
+Stage 1 drainer is a standalone plain-JVM consumer (design below). The shared streaming feeder has been
+**run at multi-node scale on the on-prem fleet** as part of the Kafka ingest cutover (the same
+`ParquetStreamFeeder`, fed from a bridged queue); the **RabbitMQ Stage-1 drainer specifically** has not
+yet been exercised at fleet scale.
 **Goal:** let Spark consume Senzing JSON records off a **RabbitMQ** queue and `addRecord` them into your
 datastore. The Spark loader runs as a **competing consumer** — it can run alongside any other consumers
 on the same queue, and RabbitMQ's exclusive per-message delivery partitions the work across all of them

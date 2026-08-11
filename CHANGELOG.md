@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+- **Docs: corrected deployment-tutorial + status claims to match reality.** On-prem Spark tutorial
+  marked **✅ validated at 100M+ record scale** (was "DRAFT — untested"); AWS EMR + Databricks
+  tutorials marked **not yet tested directly, but the same application is validated on-prem**;
+  reconciled stale "not yet run / untested" claims in README, PERFORMANCE, DATABRICKS, EXAMPLES,
+  RABBITMQ_INGEST.
+
 ### Added
 - **Feeder auto-recovery — `FeederSupervisor` (PR #13)** — the parallel-batch feeder self-heals from
   executor/worker loss: on a failed micro-batch the supervisor restarts the run, which re-reads from

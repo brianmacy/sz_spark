@@ -237,7 +237,11 @@ The path is the standard Senzing scale-out, expressed in Spark terms:
 
 ## Benchmarking (to produce real numbers)
 
-Not yet run (NEXT_STEPS #11). The intended methodology:
+The controlled records/sec sweep below has **not yet been run** (NEXT_STEPS #11) — no headline
+throughput figure is published. (The application itself *has* run on-prem at 100M+ scale, reaching
+throughput parity with the native Rust consumer — see "Measured findings" above; what is missing is a
+controlled sweep that establishes the DB-saturation point and a defensible records/sec number.) The
+intended methodology:
 
 - Representative dataset (≥ 1M records to start; scale up), real co-located PostgreSQL.
 - Sweep executor/core counts; record **records/sec (interval + cumulative)**, **redo queue depth**, DB

@@ -7,9 +7,11 @@ output / error DataFrames. The job arguments and main classes here are taken dir
 invocations follow the same documented arguments. See [`DATABRICKS.md`](DATABRICKS.md) for the
 Databricks form and [`ARCHITECTURE.md`](ARCHITECTURE.md) for what each job does.
 
-> ⚠️ **Only the local `scripts/it-local.sh` path is exercised end-to-end.** The `spark-submit`
-> command lines below are constructed from the verified job arguments but have **not** been run as
-> shown on a cluster — treat them as documented invocations, not a tested recipe.
+> ⚠️ **The `spark-submit` command lines below have not been run verbatim as shown.** The application
+> itself is validated end-to-end both locally (`scripts/it-local.sh`, real engine on SQLite) **and** on
+> the on-prem fleet at 100M+ record scale — but the exact copy-paste invocations here are constructed
+> from the verified job arguments, so treat them as documented invocations to adapt, not a
+> tested-verbatim recipe.
 
 ## Common arguments and conventions
 

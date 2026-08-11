@@ -1,8 +1,10 @@
 # Tutorial: sz_spark on AWS EMR
 
-> ⚠️ **DRAFT — untested.** Not yet validated on a live EMR cluster. Verify every step (especially the
-> GLIBC/AMI and bootstrap package names) before relying on it. Cross-check Senzing specifics against
-> the **Senzing-MCP** and your installed dist.
+> ⚠️ **Not yet exercised on a live EMR cluster.** The same sz_spark application is validated on-prem
+> at 100M+ record scale (see `docs/tutorials/spark-onprem.md`), but the EMR-specific steps here —
+> AMI/GLIBC, bootstrap packages, Aurora/RDS wiring — are **unverified**. Verify every step (especially
+> the GLIBC/AMI and bootstrap package names) before relying on it. Cross-check Senzing specifics
+> against the **Senzing-MCP** and your installed dist.
 
 Runs the sz_spark jobs on EMR against **Aurora/RDS PostgreSQL**.
 

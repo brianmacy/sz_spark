@@ -272,8 +272,9 @@ Reference docs:
 - Core vs glue vs diag job layering: [`docs/JOB_LAYERING.md`](docs/JOB_LAYERING.md)
 - Troubleshooting (Spark-specific failure modes): [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
 - Ops runbook: [`docs/RUNBOOK.md`](docs/RUNBOOK.md)
-- Deployment tutorials (⚠️ **DRAFT — untested**): [on-prem Spark](docs/tutorials/spark-onprem.md) ·
-  [AWS EMR](docs/tutorials/aws-emr.md) · [Databricks](docs/tutorials/databricks.md)
+- Deployment tutorials: [on-prem Spark](docs/tutorials/spark-onprem.md) (✅ **validated on-prem at
+  100M+ records**) · [AWS EMR](docs/tutorials/aws-emr.md) · [Databricks](docs/tutorials/databricks.md)
+  (⚠️ EMR/Databricks **not yet tested directly**; the same application is validated on-prem)
 - Databricks reference: [`docs/DATABRICKS.md`](docs/DATABRICKS.md)
 - Design (implementation): [`docs/DESIGN.md`](docs/DESIGN.md)
 

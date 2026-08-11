@@ -1,9 +1,11 @@
 # Tutorial: sz_spark on Databricks
 
-> ⚠️ **DRAFT — untested.** Not yet validated on a live Databricks workspace. Verify each step
-> (especially the DBR/Spark version, GLIBC, and init-script package names) before relying on it.
-> Cross-check Senzing specifics against the **Senzing-MCP** and your installed dist. This is the
-> step-by-step walkthrough; `docs/DATABRICKS.md` is the condensed reference.
+> ⚠️ **Not yet exercised on a live Databricks workspace.** The same sz_spark application is validated
+> on-prem at 100M+ record scale (see `docs/tutorials/spark-onprem.md`), but the Databricks-specific
+> steps here — DBR/Spark version, GLIBC, init-script packages, Unity Catalog — are **unverified**.
+> Verify each step before relying on it. Cross-check Senzing specifics against the **Senzing-MCP** and
+> your installed dist. This is the step-by-step walkthrough; `docs/DATABRICKS.md` is the condensed
+> reference.
 
 Runs the sz_spark jobs on Databricks against a co-located PostgreSQL (e.g. Aurora/RDS, or Azure DB
 for PostgreSQL).

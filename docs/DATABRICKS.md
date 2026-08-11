@@ -3,11 +3,13 @@
 A deploy guide; see `docs/RUNBOOK.md` for the binding preconditions, `docs/PERFORMANCE.md` for sizing,
 and `docs/TROUBLESHOOTING.md` for failure modes.
 
-> ⚠️ **Not yet validated on a live Databricks cluster** (NEXT_STEPS #9). The required-conf and
-> preconditions are derived from the verified design and the SDK's native-loading facts; the concrete
-> cluster steps below (init scripts, cluster libraries, Volumes paths) are **intended configuration**
-> to walk through and confirm on a real DBR 14+ cluster, then mark validated. Treat them as a starting
-> checklist, not a tested recipe.
+> ⚠️ **Not yet validated on a live Databricks cluster** (NEXT_STEPS #9). The same sz_spark application
+> is validated on-prem at 100M+ record scale (see `docs/tutorials/spark-onprem.md`), and the entity-mart
+> replication code (Phase 1+2) is merged; what remains unverified is the **live-Databricks / Unity
+> Catalog** validation (Phase 3). The required-conf and preconditions are derived from the verified
+> design and the SDK's native-loading facts; the concrete cluster steps below (init scripts, cluster
+> libraries, Volumes paths) are **intended configuration** to walk through and confirm on a real DBR 14+
+> cluster, then mark validated. Treat them as a starting checklist, not a tested recipe.
 
 ## Cluster requirements
 

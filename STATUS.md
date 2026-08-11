@@ -1,6 +1,21 @@
 # Project Status
 
-**Date:** 2026-08-09
+**Date:** 2026-08-11
+**Branch:** `bem_feeder_autorecovery` (PR **#13**, commit `ed97da2`) → squash-merging into `main`.
+Also on `main`: dependabot CI-action bumps (PR #14 `sbt/setup-sbt` 1.5.2, PR #15 `actions/checkout` 7.0.1).
+
+## ★ Feeder auto-recovery — `FeederSupervisor` (PR #13, squash-merged)
+
+The parallel-batch feeder now self-heals from executor/worker loss. `FeederSupervisor` wraps
+`OverlappingBatchEngine`/`ParquetParallelFeeder`: a failed micro-batch triggers a supervised restart
+that re-reads from the committed offset/watermark, preserving **at-least-once** semantics (a dropped
+executor no longer strands the feed). Covered by `FeederSupervisorSpec` (mocked plumbing, no engine);
+`/prep` default suite **139/0**. Docs: `docs/PARALLEL_BATCH_FEEDER.md` §Auto-recovery.
+⚠ **Unit-validated only — NOT yet exercised against the live engine on `.142`** (the `.142` feeder jar
+must be rebuilt to carry this, then IT-validated on the live fleet — see NEXT_STEPS).
+
+## Entity-mart replication (prior work, on `main`)
+
 **Branch:** main — entity-mart replication **Phase 1 + 1.1 (PR #10) and Phase 2 (PR #11) both MERGED**.
 **State:** the entity-mart is complete through Phase 2 on `main`: `EntityMartSchema`, `GetCore`,
 `EntityMartRows`, `EntityMartSink`/`LocalDeltaSink`, `EntityMartSync`, `DatabricksUcSink` (Unity-Catalog

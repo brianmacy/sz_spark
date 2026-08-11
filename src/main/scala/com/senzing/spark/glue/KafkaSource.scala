@@ -82,6 +82,10 @@ final class KafkaSource(
       .option("startingOffsets", startJson)
       .option("endingOffsets", endJson)
       .option("minPartitions", minPartitions)
+      // Match RabbitMQ (512 MiB) on the consumer side too, so a large record the producer now
+      // sends can be fetched. Spark passes kafka.* options through to the underlying consumer.
+      .option("kafka.max.partition.fetch.bytes", MqToKafka.MaxRecordBytes.toString)
+      .option("kafka.fetch.max.bytes", MqToKafka.MaxRecordBytes.toString)
       .load()
       .selectExpr("CAST(value AS STRING) AS body")
       .selectExpr(

@@ -41,6 +41,10 @@ object MqToKafka {
   private val HeartbeatSeconds = 3600
   private val IdlePauseMs = 200L
   private val ThrottlePauseMs = 1000L
+  // Match RabbitMQ's max_message_size (512 MiB) so any record RabbitMQ accepts also flows through
+  // Kafka. The 1 MiB producer default (max.request.size) rejected large Sayari records
+  // (RecordTooLargeException) and crashed the bridge. Shared with the consumer side (KafkaSource).
+  val MaxRecordBytes = 536870912L // 512 MiB == RabbitMQ max_message_size
 
   /** True when the Spark consumer is at least `maxLag` records behind the Kafka tail. */
   private[glue] def shouldThrottle(latest: Long, committed: Long, maxLag: Long): Boolean =
@@ -148,6 +152,10 @@ object MqToKafka {
     props.put("value.serializer", classOf[ByteArraySerializer].getName)
     props.put("acks", "all") // durable before we ack RabbitMQ
     props.put("enable.idempotence", "true") // no duplicate on producer retry
+    // Match RabbitMQ (512 MiB): permit large records instead of the 1 MiB default that crashed the
+    // bridge. buffer.memory must be >= max.request.size so one max-size record can be buffered.
+    props.put("max.request.size", MaxRecordBytes.toString)
+    props.put("buffer.memory", MaxRecordBytes.toString)
     new KafkaProducer[Array[Byte], Array[Byte]](props)
   }
 }

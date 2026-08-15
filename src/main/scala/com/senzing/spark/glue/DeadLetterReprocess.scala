@@ -1,5 +1,6 @@
 package com.senzing.spark.glue
 
+import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
 
@@ -14,12 +15,19 @@ import com.senzing.spark.work.ErrorCategory
  * re-feed dir (the feeder's `inbox`, or a separate dir a supervisor then moves in). Terminal
  * categories (BAD_INPUT / NOT_FOUND) stay quarantined — re-feeding them would just loop.
  *
- * A THIN HELPER, NOT A SCHEDULER: it does one pass and exits. Cadence (when/how often to sweep the
- * dead-letter dir, and whether to move-or-copy) is an operational decision left to a
- * cron/supervisor — see docs/DEAD_LETTER.md. Kept engine-free so it is unit-testable and never
- * re-pays native init.
+ * IDEMPOTENT SWEEP: each pass snapshots the shard files present now, re-emits from exactly those,
+ * then ARCHIVES (renames) them out of the dead-letter dir into `archive`. So a second pass over an
+ * un-changed dir re-emits nothing — the fix for the prior "re-emits every shard forever" behavior.
+ * Shards the feeder writes DURING a sweep are not in the snapshot and are picked up by the next
+ * pass. Re-feeding itself is safe: `add_record` is idempotent on (DATA_SOURCE, RECORD_ID), and the
+ * terminal-category filter keeps BAD_INPUT / NOT_FOUND out of the re-feed loop entirely. Archived
+ * shards stay Spark-readable (`spark.read.parquet(archive)`) for triage of the quarantined rows.
  *
- * Args: `deadLetter` (source dir), `reFeed` (destination inbox dir).
+ * A THIN HELPER, NOT A SCHEDULER: it does one pass and exits; cadence is a cron/supervisor decision
+ * (see docs/DEAD_LETTER.md). Kept engine-free so it is unit-testable and never re-pays native init.
+ *
+ * Args: `deadLetter` (source dir), `reFeed` (destination inbox dir), `archive` (swept-shard
+ * destination; defaults to `<deadLetter>-archived`).
  */
 object DeadLetterReprocess extends SparkJob {
 
@@ -46,24 +54,37 @@ object DeadLetterReprocess extends SparkJob {
       .select(col("dataSource"), col("recordId"), col("payload"))
 
   /**
-   * Read the dead-letter dir, select the reprocessable records, and write them as `InputRecord`
-   * Parquet shards (Append) into `reFeed` for the feeder to pick up. Returns the re-emitted count.
+   * Snapshot the dead-letter shards, select the reprocessable records, write them as `InputRecord`
+   * Parquet shards (Append) into `reFeed` for the feeder to pick up, then archive the swept shards
+   * into `archive` so the pass is idempotent. Returns the re-emitted count. A missing/empty
+   * dead-letter dir is a 0-count no-op. Archiving happens LAST, after both the write and the count
+   * have read the snapshot, so the source shards are still present for both actions.
    */
-  def run(spark: SparkSession, deadLetter: String, reFeed: String): Long = {
-    val src = spark.read.parquet(deadLetter)
-    val out = selectReprocessable(src)
-    out.write.mode(SaveMode.Append).parquet(reFeed)
-    out.count()
+  def run(spark: SparkSession, deadLetter: String, reFeed: String, archive: String): Long = {
+    val fs = ShardIo.fileSystem(spark, deadLetter)
+    val shards = ShardIo.listShards(fs, new Path(deadLetter))
+    if (shards.isEmpty) 0L
+    else {
+      val out = selectReprocessable(spark.read.parquet(shards.map(_.toString): _*))
+      out.write.mode(SaveMode.Append).parquet(reFeed)
+      val n = out.count()
+      val archivePath = new Path(archive)
+      shards.foreach(shard => ShardIo.dispose(fs, shard, Some(archivePath)))
+      n
+    }
   }
 
   def main(args: Array[String]): Unit = {
     val m = GlueArgs.parse(args)
+    val deadLetter = m.getOrElse("deadLetter", "")
+    val reFeed = m.getOrElse("reFeed", "")
+    val archive = m.getOrElse("archive", s"$deadLetter-archived")
     val spark = buildSession("sz-dead-letter-reprocess")
     try {
-      val n = run(spark, m.getOrElse("deadLetter", ""), m.getOrElse("reFeed", ""))
+      val n = run(spark, deadLetter, reFeed, archive)
       spark.sparkContext.setJobDescription(s"reprocessed $n dead-letter records")
       // scalastyle:off println
-      println(s"DEAD_LETTER_REPROCESS re-emitted $n records to ${m.getOrElse("reFeed", "")}")
+      println(s"DEAD_LETTER_REPROCESS re-emitted $n records to $reFeed (swept shards -> $archive)")
       // scalastyle:on println
     } finally spark.stop()
   }

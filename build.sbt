@@ -56,10 +56,11 @@ lazy val root = (project in file("."))
       // Kafka source (glue.KafkaSource, Step 2). Provided like spark-sql — supply at launch with
       // `--packages org.apache.spark:spark-sql-kafka-0-10_2.13:<sparkVersion>` (present on Databricks).
       "org.apache.spark" %% "spark-sql-kafka-0-10" % sparkVersion % Provided,
-      // Kafka producer/consumer for the plain-JVM RabbitMQ->Kafka bridge (glue.MqToKafka) AND the
-      // driver-side endOffsets metadata in glue.KafkaSource. BUNDLED (not Provided) so the standalone
-      // bridge runs with just the FAT jar; pinned to Spark 4.0.1's kafka-clients (3.9.1) so the
-      // bundled copy is byte-identical to the cluster's on the KafkaSource read path — no conflict.
+      // Kafka producer/consumer clients: the on-prem producer (glue.FileToKafka), the driver-side
+      // endOffsets metadata in glue.KafkaSource, and the glue.KafkaLag monitor. BUNDLED (not
+      // Provided) so the standalone plain-JVM tools (KafkaLag) run with just the FAT jar; pinned to
+      // Spark 4.0.1's kafka-clients (3.9.1) so the bundled copy is byte-identical to the cluster's on
+      // the KafkaSource read path — no conflict.
       "org.apache.kafka" % "kafka-clients" % "3.9.1",
       // Delta source (glue.DeltaSource, Step 2c) — read a Delta table's change feed as a watermark
       // source. Provided: present on Databricks, or add via `--packages io.delta:delta-spark_2.13:4.0.0`.

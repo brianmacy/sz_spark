@@ -60,14 +60,17 @@ spark-submit --class com.senzing.spark.glue.ParquetParallelFeeder \
 
 ## The rest of Step 2 (also built)
 
-- **RabbitMQ→Kafka bridge** (`glue.MqToKafka`) — plain-JVM competing consumer, the RabbitMQ→Kafka
-  analog of `MqToParquet`. Moves records from the queue onto the topic, **throttled** so the Spark
-  consumer stays ≤ `maxLag` (default 5M) records behind: `lag = latestKafkaOffset − committedOffset`
-  (committed offset read from the SAME checkpoint the feeder writes); pauses draining while
-  `lag ≥ maxLag`. **Produce-THEN-ack** write-ahead (crash between ⇒ RabbitMQ redelivers ⇒ duplicate ⇒
-  idempotent `add_record` absorbs). `kafka-clients` is BUNDLED so the bridge runs from the FAT jar with
-  no `--packages`. Args: `amqpUrl` / `queue` / `bootstrapServers` / `topic` / `checkpoint` / `maxLag` /
-  `batchRecords`.
+- **`glue.FileToKafka`** — the on-prem producer: loads a JSONL corpus (optionally `.bz2`/`.gz`)
+  straight onto the topic, one line = one Kafka message value (raw body, exactly what `KafkaSource`
+  reads). `spark.read.text` → `write.format("kafka")`; 512 MiB producer caps
+  (`KafkaSource.MaxRecordBytes`) + `acks=all`. Args: `input` / `bootstrapServers` / `topic`. (This
+  replaced the old `MqToKafka` RabbitMQ→Kafka bridge, a dev-time hack removed once the Kafka path
+  became self-contained on-prem: produce with `FileToKafka`, consume with `KafkaSource`.)
+- **`glue.KafkaLag`** — processing-progress monitor: prints topic HWM (endOffsets), the feeder's
+  committed offset (the `OffsetWatermark` checkpoint), lag, and looped records/s. ⛔ `kafka-consumer-
+  groups.sh --describe` shows nothing — the feeder never commits group offsets — so lag is computed
+  from the checkpoint vs HWM. Plain-JVM (runs off the FAT jar). Args: `bootstrapServers` / `topic` /
+  `checkpoint` / `intervalMs` (0 = one-shot).
 - **`glue.DeltaSource`** — Delta table version / CDF watermark; same `OffsetWatermark`. Prereqs: CDF
   enabled (`delta.enableChangeDataFeed=true`) + a STRING `value` column with the JSON body. ⚠
   **version-granular, not row-count-granular** — a large commit is one batch; prefer Kafka for the

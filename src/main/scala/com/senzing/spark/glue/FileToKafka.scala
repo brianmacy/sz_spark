@@ -83,6 +83,10 @@ object FileToKafka extends SparkJob {
       .option("kafka.bootstrap.servers", bootstrapServers)
       .option("topic", topic)
       .option("kafka.acks", "all")
+      .option(
+        "kafka.compression.type",
+        "zstd"
+      ) // producer-side compression — the durable fixture topic
       .option("kafka.max.request.size", KafkaSource.MaxRecordBytes.toString)
       .option("kafka.buffer.memory", KafkaSource.MaxRecordBytes.toString)
       .save()
@@ -118,6 +122,7 @@ object FileToKafka extends SparkJob {
     props.put("key.serializer", "org.apache.kafka.common.serialization.ByteArraySerializer")
     props.put("value.serializer", "org.apache.kafka.common.serialization.ByteArraySerializer")
     props.put("acks", "all")
+    props.put("compression.type", "zstd") // producer-side compression — the durable fixture topic
     // A monster Sayari record can approach the RabbitMQ 512 MiB ceiling; the 1 MiB producer default
     // (max.request.size) would reject it. buffer.memory must be >= max.request.size so one max-size
     // record can be buffered.

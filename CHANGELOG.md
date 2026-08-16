@@ -5,6 +5,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-16
+
+### Added
+- **`glue.FileToKafka` — on-prem JSONL→Kafka producer.** Loads a corpus file (optionally `.bz2`/`.gz`)
+  straight into the topic `KafkaSource` reads: each line becomes one Kafka message value (raw body).
+  The maintained replacement for the retired RabbitMQ→Kafka bridge — the Kafka path is now
+  self-contained on-prem (produce with `FileToKafka`, consume with `KafkaSource`), no RabbitMQ hop.
+  512 MiB producer caps (`KafkaSource.MaxRecordBytes`) + `acks=all`; testable `frame` split from the
+  connector write (`FileToKafkaSpec`).
+- **`glue.KafkaLag` — Kafka processing-progress monitor.** Prints topic HWM (endOffsets), the
+  feeder's committed offset (the `OffsetWatermark` checkpoint), lag, and looped records/s. `kafka-
+  consumer-groups.sh` shows nothing (the feeder never commits group offsets), so lag is computed from
+  the checkpoint vs HWM. Plain-JVM (runs off the FAT jar); pure `ratePerSec` covered by `KafkaLagSpec`.
+
+### Changed
+- **Dead-letter re-drive is now idempotent (`DeadLetterReprocess`).** The sweep snapshots the shard
+  files, re-emits the reprocessable rows, then **archives** the swept shards out of the dead-letter
+  dir (`archive=`, default `<deadLetter>-archived`), so a second pass re-emits nothing (the prior
+  pass re-emitted every shard forever). Shards written during a sweep are picked up next pass;
+  archived shards stay `spark.read.parquet`-queryable for triage. `run` gained an `archive` arg;
+  covered by `DeadLetterReprocessSpec`.
+- **Dead-letter rows are stamped with `failedAt` (timestamp) + `source`** at both sinks
+  (`OverlappingBatchEngine`, `ParquetStreamFeeder`) so the DLQ is self-describing when re-driven.
+
+### Removed
+- **`glue.MqToKafka` — the RabbitMQ→Kafka bridge.** A dev-time hack from the Spark-ER build-out; it
+  served no purpose in the maintained pipeline (on-prem ingest is RabbitMQ→`MqToParquet`→inbox, and
+  the Kafka path is now fed by `FileToKafka` / an external producer). `MaxRecordBytes` moved to
+  `KafkaSource`; the kafka-clients / spark-sql-kafka deps stay (used by `KafkaSource`/`FileToKafka`/
+  `KafkaLag`). Removed `MqToKafkaSpec`.
+
 ### Changed
 - **Docs: corrected deployment-tutorial + status claims to match reality.** On-prem Spark tutorial
   marked **✅ validated at 100M+ record scale** (was "DRAFT — untested"); AWS EMR + Databricks

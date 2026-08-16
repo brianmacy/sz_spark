@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicLong, AtomicReference}
 import scala.util.control.NonFatal
 
 import org.apache.hadoop.fs.Path
+import org.apache.spark.sql.functions.{current_timestamp, lit}
 import org.apache.spark.sql.{Dataset, SparkSession}
 
 import com.senzing.spark.core.SplitResult
@@ -107,6 +108,9 @@ object OverlappingBatchEngine {
 
     source.reclaim()
 
+    // Stamped onto every dead-letter row so the DLQ is self-describing when re-driven / triaged.
+    val sourceName = source.getClass.getSimpleName
+
     val availableNow = trigger == "availableNow"
     val processed = new AtomicLong(0)
     val failed = new AtomicLong(0)
@@ -144,7 +148,12 @@ object OverlappingBatchEngine {
         val df = if (partitionsPerChunk > 1) chunk.df.repartition(partitionsPerChunk) else chunk.df
         val result = process(df, staging)
         // Per-chunk single-file sinks (unique names) — concurrency-safe, unlike Append.
-        if (deadLetter.nonEmpty) ShardIo.writeSingleFile(spark, result.errors, deadLetter, "de")
+        if (deadLetter.nonEmpty) {
+          val errs = result.errors
+            .withColumn("failedAt", current_timestamp())
+            .withColumn("source", lit(sourceName))
+          ShardIo.writeSingleFile(spark, errs, deadLetter, "de")
+        }
         if (output.nonEmpty) ShardIo.writeSingleFile(spark, result.good, output, "af")
         source.commit(chunk.bounds) // chunk is in the engine — dispose / advance watermark
         ShardIo.deleteQuietly(ShardIo.fileSystem(spark, staging), new Path(staging))

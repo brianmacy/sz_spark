@@ -1,5 +1,6 @@
 package com.senzing.spark.glue
 
+import org.apache.spark.sql.functions.{current_timestamp, lit}
 import org.apache.spark.sql.streaming.{StreamingQuery, Trigger}
 import org.apache.spark.sql.{Dataset, Row, SaveMode, SparkSession}
 
@@ -52,7 +53,13 @@ object ParquetStreamFeeder extends SparkJob {
    * directly.
    */
   def writeSinks(result: SplitResult, deadLetter: String, output: String): Unit = {
-    if (deadLetter.nonEmpty) result.errors.write.mode(SaveMode.Append).parquet(deadLetter)
+    if (deadLetter.nonEmpty)
+      result.errors
+        .withColumn("failedAt", current_timestamp())
+        .withColumn("source", lit("stream-inbox"))
+        .write
+        .mode(SaveMode.Append)
+        .parquet(deadLetter)
     if (output.nonEmpty) result.good.write.mode(SaveMode.Append).parquet(output)
   }
 

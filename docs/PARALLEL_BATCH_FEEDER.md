@@ -166,14 +166,14 @@ the replayed tail is a handful of cheap optimized no-op re-adds (at-least-once).
   (`OffsetWatermarkSpec`, real local FS); the count-bounding + bounds round-trip in `KafkaSourceSpec`.
   Broker end-to-end is an `IntegrationTest` (needs a live Kafka), like `EngineIT`.
 
-**The RabbitMQ→Kafka bridge is built** ([`MqToKafka.scala`](../src/main/scala/com/senzing/spark/glue/MqToKafka.scala))
-— a plain-JVM competing consumer (the RabbitMQ→Kafka analog of the [`MqToParquet`] drainer) that moves
-records from the queue onto the topic, **throttled so the Spark consumer stays ≤ `maxLag` (default 5M)
-records behind**: `lag = latestKafkaOffset − committedOffset` (the committed offset read from the SAME
-checkpoint the feeder writes), and while `lag ≥ maxLag` it pauses draining — Kafka retention + this cap
-replace unbounded queue growth. Same write-ahead invariant as the parquet drainer: **produce-THEN-ack**
-(a crash between → RabbitMQ redelivers → duplicate Kafka record → idempotent `add_record` absorbs it).
-Args: `amqpUrl` / `queue` / `bootstrapServers` / `topic` / `checkpoint` / `maxLag` / `batchRecords`.
+**The on-prem Kafka producer is built** ([`FileToKafka.scala`](../src/main/scala/com/senzing/spark/glue/FileToKafka.scala))
+— loads a JSONL corpus (optionally `.bz2`/`.gz`) straight onto the topic `KafkaSource` reads: one line
+= one Kafka message value (the raw body). `spark.read.text` → `write.format("kafka")`, 512 MiB producer
+caps + `acks=all`. Args: `input` / `bootstrapServers` / `topic`. Progress is monitored by
+[`KafkaLag.scala`](../src/main/scala/com/senzing/spark/glue/KafkaLag.scala) (topic HWM vs the feeder's
+committed offset → lag + records/s). _(This replaced the dev-time `MqToKafka` RabbitMQ→Kafka bridge,
+removed once the Kafka path became self-contained on-prem; on-prem RabbitMQ ingest is the
+`MqToParquet`→inbox parquet path.)_
 
 **`DeltaSource` is built** ([`DeltaSource.scala`](../src/main/scala/com/senzing/spark/glue/DeltaSource.scala))
 — the watermark seam over a Delta table's **Change Data Feed**; cursor = table **version**, same
@@ -184,6 +184,6 @@ commit is one batch; keep source commits modest or raise `recordsPerBatch` so th
 big version. For the tightest tail-freeness prefer Kafka. `delta-spark` is `Provided` (present on
 Databricks / add via `--packages io.delta:delta-spark_2.13:4.0.0`).
 
-**Testing:** `MqToKafkaSpec` (produce-then-ack write-ahead + throttle boundary, Mockito channel/producer),
-`DeltaSourceSpec` (version-window arithmetic), and `KafkaSourceIT` (broker end-to-end, `IntegrationTest` —
-`SZ_IT=1 SZ_KAFKA_BOOTSTRAP=… `). Kafka/Delta/RabbitMQ end-to-end need live infra.
+**Testing:** `FileToKafkaSpec` (producer frame — non-empty lines → `value` column), `KafkaLagSpec`
+(the pure records/s math), `DeltaSourceSpec` (version-window arithmetic), and `KafkaSourceIT` (broker
+end-to-end, `IntegrationTest` — `SZ_IT=1 SZ_KAFKA_BOOTSTRAP=… `). Kafka/Delta end-to-end need live infra.

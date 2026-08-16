@@ -6,11 +6,10 @@ Databricks-native path.
 
 ```mermaid
 flowchart LR
-  subgraph opt [If your records start in RabbitMQ]
-    q[(RabbitMQ)] -->|throttled bridge| br[MqToKafka]
+  subgraph opt [If your records start in a file]
+    f[(JSONL / .bz2 file)] -->|glue.FileToKafka| t
   end
-  br --> t[(Kafka topic)]
-  prod[Any producer] --> t
+  prod[Any producer] --> t[(Kafka topic)]
   t -->|RecordSource: watermark| fd[Overlapping-batch feeder<br/>source=kafka]
   fd --> eng[Engine → repository]
 ```
@@ -18,7 +17,7 @@ flowchart LR
 Two ways in:
 
 - **Records already in Kafka** — point the feeder at the topic. Done.
-- **Records in RabbitMQ** — run the `glue.MqToKafka` bridge to move them onto a topic first (below).
+- **Records in a file** — load the corpus straight onto the topic with `glue.FileToKafka` (below).
 
 ## Run it
 
@@ -31,11 +30,21 @@ spark-submit --master "$SPARK_MASTER" \
   startingOffset=earliest recordsPerBatch=1000 maxUnprocessedBatches=200 \
   output="$AFFECTED" deadLetter="$DLQ"
 
-# Optional bridge — RabbitMQ → Kafka, self-throttling
-spark-submit --master 'local[*]' --class com.senzing.spark.glue.MqToKafka \
-  sz-spark-assembly.jar amqpUrl="$AMQP" queue="$QUEUE" \
-  bootstrapServers="$BROKERS" topic=sz-records checkpoint="$CKPT" maxLag=5000000
+# Load a corpus file straight onto the topic (JSONL, optionally .bz2/.gz)
+spark-submit --master "$SPARK_MASTER" \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.1 \
+  --class com.senzing.spark.glue.FileToKafka sz-spark-assembly.jar \
+  input="$CORPUS" bootstrapServers="$BROKERS" topic=sz-records
+
+# Watch processing progress — topic HWM vs the feeder's committed offset (records/s + lag)
+spark-submit --master 'local[*]' --class com.senzing.spark.glue.KafkaLag \
+  sz-spark-assembly.jar bootstrapServers="$BROKERS" topic=sz-records checkpoint="$CKPT" intervalMs=60000
 ```
+
+> **Large records:** the producer, the consumer fetch caps, and the topic/broker must allow the
+> Sayari 512 MiB ceiling — `FileToKafka`/`KafkaSource` set the client caps
+> (`KafkaSource.MaxRecordBytes`); on the broker set `max.message.bytes=536870912` on the topic and
+> `message.max.bytes=536870912` as the broker default, or a >1 MiB record is rejected.
 
 ## Design, in four points
 

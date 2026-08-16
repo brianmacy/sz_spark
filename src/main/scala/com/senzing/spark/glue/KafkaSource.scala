@@ -82,6 +82,10 @@ final class KafkaSource(
       .option("startingOffsets", startJson)
       .option("endingOffsets", endJson)
       .option("minPartitions", minPartitions)
+      // Match RabbitMQ (512 MiB) on the consumer side too, so a large record the producer now
+      // sends can be fetched. Spark passes kafka.* options through to the underlying consumer.
+      .option("kafka.max.partition.fetch.bytes", KafkaSource.MaxRecordBytes.toString)
+      .option("kafka.fetch.max.bytes", KafkaSource.MaxRecordBytes.toString)
       .load()
       .selectExpr("CAST(value AS STRING) AS body")
       .selectExpr(
@@ -99,6 +103,15 @@ object KafkaSource {
    * One unpartitioned topic ⇒ a single Kafka partition; parallelism is `minPartitions`, not this.
    */
   val SinglePartition: Int = 0
+
+  /**
+   * Match RabbitMQ's `max_message_size` (512 MiB) end to end so any record RabbitMQ accepts also
+   * flows through Kafka. Kafka's 1 MiB defaults (producer `max.request.size`, consumer fetch caps)
+   * reject large Sayari records (RecordTooLargeException). Used by the consumer read caps above,
+   * the on-prem producer [[FileToKafka]], and any lag tooling. (Formerly
+   * `MqToKafka.MaxRecordBytes`, relocated here when the RabbitMQ→Kafka bridge was retired.)
+   */
+  val MaxRecordBytes: Long = 536870912L // 512 MiB == RabbitMQ max_message_size
 
   /**
    * The next bounded range to claim from `start` given the current `latest` (exclusive) offset:

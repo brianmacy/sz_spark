@@ -69,16 +69,35 @@ persist-then-proceed discipline as Stage 1's persist-then-ack (see `RABBITMQ_ING
    (`dataSource, recordId, payload`) and write them as Parquet shards into a **re-feed dir** in
    `SaveMode.Append`. Point the feeder's `inbox=` at that dir (or have a supervisor move the shards
    into the inbox) and the running streaming query picks them up.
+4. **Archive the swept shards** — the pass snapshots the shard files present at the start, then
+   renames exactly those out of the dead-letter dir into `archive=` (default `<deadLetter>-archived`)
+   after the re-emit. This makes the sweep **idempotent**: a second pass over an unchanged dir
+   re-emits nothing (previously it re-emitted every shard on every run). Shards the feeder writes
+   *during* a sweep are not in the snapshot and are picked up next pass. Archived shards remain
+   `spark.read.parquet(archive)`-queryable, so the quarantined terminal rows are still available for
+   human triage.
 
 ```
 spark-submit --class com.senzing.spark.glue.DeadLetterReprocess sz-spark-assembly.jar \
-  deadLetter=$IO_BASE/deadletter  reFeed=$IO_BASE/inbox
+  deadLetter=$IO_BASE/deadletter  reFeed=$IO_BASE/inbox  archive=$IO_BASE/deadletter-archived
 ```
 
-**Cadence is operational**, deliberately left to a cron/supervisor: sweep the dead-letter dir on an
-interval, decide move-vs-copy, and archive the shards you've re-fed so they aren't re-emitted every
-sweep. The pure filter (`DeadLetterReprocess.selectReprocessable`) is unit-tested; only the timing
-policy is left out.
+Re-feeding is safe to repeat: `add_record` is idempotent on `(DATA_SOURCE, RECORD_ID)`, and the
+terminal-category filter keeps `BAD_INPUT`/`NOT_FOUND` out of the loop. **Cadence** (how often to
+sweep) is still an operational cron/supervisor decision — but the archive step means a sweep is now
+self-cleaning, not a re-emit-everything hazard. Covered by `DeadLetterReprocessSpec` (re-emit once,
+archive, second pass = 0).
+
+### Kafka-path re-drive
+The dead-letter sink is engine-level (`OverlappingBatchEngine`), so it is identical for all sources —
+`InboxSource`, **`KafkaSource`**, and `DeltaSource`. There is no Kafka-specific re-drive: run
+`DeadLetterReprocess` to project the failures into a re-feed **inbox** dir, then feed that dir with
+the parquet source (no need to re-produce to Kafka):
+
+```
+spark-submit --class com.senzing.spark.glue.ParquetParallelFeeder sz-spark-assembly.jar \
+  source=inbox trigger=availableNow inbox=$IO_BASE/deadletter-refeed processing=$IO_BASE/redrive-proc ...
+```
 
 ## Databricks variant (document, don't build)
 Same shape, swap the writer:

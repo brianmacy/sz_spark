@@ -1,87 +1,55 @@
 # Project Status
 
-**Date:** 2026-08-11
-**Branch:** `bem_feeder_autorecovery` (PR **#13**, commit `ed97da2`) → squash-merging into `main`.
-Also on `main`: dependabot CI-action bumps (PR #14 `sbt/setup-sbt` 1.5.2, PR #15 `actions/checkout` 7.0.1).
+**Date:** 2026-08-16
+**Branch:** `main` — **v0.2.0 released** (tag `v0.2.0` on merge commit `a6b34f1`, GitHub release published).
+Working tree clean. Last shipped PR: **#17** (Kafka producer + idempotent DLQ re-drive).
 
-## ★ Feeder auto-recovery — `FeederSupervisor` (PR #13, squash-merged)
+## ★ v0.2.0 — shipped (main @ `a6b34f1`, tag `v0.2.0`)
 
-The parallel-batch feeder now self-heals from executor/worker loss. `FeederSupervisor` wraps
-`OverlappingBatchEngine`/`ParquetParallelFeeder`: a failed micro-batch triggers a supervised restart
-that re-reads from the committed offset/watermark, preserving **at-least-once** semantics (a dropped
-executor no longer strands the feed). Covered by `FeederSupervisorSpec` (mocked plumbing, no engine);
-`/prep` default suite **139/0**. Docs: `docs/PARALLEL_BATCH_FEEDER.md` §Auto-recovery.
-⚠ **Unit-validated only — NOT yet exercised against the live engine on `.142`** (the `.142` feeder jar
-must be rebuilt to carry this, then IT-validated on the live fleet — see NEXT_STEPS).
+The Kafka path is now self-contained on-prem and the dead-letter re-drive is idempotent. Landed via
+PR #17 (merged 2026-08-16), released as **v0.2.0** (signed annotated tag; `gh release` published from
+the CHANGELOG `[0.2.0]` notes). `build.sbt` version is `0.2.0` (was drifted at `0.1.0` behind the
+`v0.1.2` tag — now reconciled and ahead of all prior tags).
 
-## Entity-mart replication (prior work, on `main`)
+- **`glue.FileToKafka`** — on-prem JSONL(.bz2/.gz)→Kafka producer (each line = one message value;
+  512 MiB caps, `acks=all`). The maintained replacement for the retired bridge: produce with
+  `FileToKafka`, consume with `KafkaSource`, no RabbitMQ hop.
+- **`glue.KafkaLag`** — plain-JVM processing-progress monitor (topic HWM vs the feeder's checkpoint
+  offset; `kafka-consumer-groups.sh` shows nothing since the feeder never commits group offsets).
+- **Idempotent DLQ re-drive (`DeadLetterReprocess`)** — snapshots shards, re-emits reprocessable rows,
+  then **archives** swept shards out of the dead-letter dir, so a second pass re-emits nothing (prior
+  behavior re-emitted every shard forever). DLQ rows are stamped `failedAt` + `source` at both sinks.
+- **Retired `glue.MqToKafka`** — the dev-time RabbitMQ→Kafka bridge; `MaxRecordBytes` moved to
+  `KafkaSource`. (The kafka-clients / spark-sql-kafka deps stay — used by `KafkaSource`/`FileToKafka`/
+  `KafkaLag`.)
 
-**Branch:** main — entity-mart replication **Phase 1 + 1.1 (PR #10) and Phase 2 (PR #11) both MERGED**.
-**State:** the entity-mart is complete through Phase 2 on `main`: `EntityMartSchema`, `GetCore`,
-`EntityMartRows`, `EntityMartSink`/`LocalDeltaSink`, `EntityMartSync`, `DatabricksUcSink` (Unity-Catalog
-target), + the change-gate/orphan-reconcile, tutorial **Guide 07**, and Databricks deploy docs. Default
-suite **133/0**, `EntityMartSinkIT` 5/5. Remaining work is **Phase 3 — live-infra validation** (needs a
-real Databricks cluster / the fleet, not code); see NEXT_STEPS. Separately landed this session: the `.142`
-Kafka cutover (operational, NAS) and the dbperf PG18 work (dbperf PR #15, merged).
+### Validation at release
+- **CI `build-and-test` PASS** on the merge commit (runs `sbt test` — the unit suite is green).
+- **`EngineIT` 5/5** verified locally this session against the licensed engine (`/opt/senzing`, throwaway
+  SQLite, `SZ_IT=1`) via `scripts/it-local.sh` — the real-engine gate PR #17's surface had never run.
+- Tree clean; the profiling-only `NativeStaging` `SZ_NO_STRIP=1` change was **discarded** (not shipped).
 
-## Entity-mart replication — Phase 1 (PR #10) + Phase 2 (PR #11) MERGED
+### Known CHANGELOG editorial follow-ups (non-blocking, content is accurate)
+The `[0.2.0]` section is dev-PR-ordered: duplicate subsection headers (Added×2, Changed×3) and
+`glue.MqToKafka` appears in both Added (its dev-line introduction) and Removed (its retirement) of the
+same release. Content is complete and accurate; a future patch can consolidate into single
+Added/Changed/Removed/Docs subsections and collapse the intra-release MqToKafka churn.
 
-Design of record: `~/.claude/plans/sz_spark_entity_map_delta_replication.md`. Driven by the
-affected-entity feed (`WITH_INFO` → `AFFECTED_ENTITIES`) the feeders already emit → per affected id
-`getEntity` → MERGE into Delta tables.
+## Prior work on `main` (context)
 
-- **Phase 1 DONE (all `mart/`):** `EntityMartSchema` (Delta DDL), `GetCore` (engine bracket → explicit
-  §7.4-flag `getEntity` → tagged ENTITY/GONE/ERROR, mirrors `SparkRecordOps`), `EntityMartRows`
-  (Jackson transform → four frames + tombstones + canonical hash; 7-case `EntityMartRowsSpec`),
-  `EntityMartSink`/`LocalDeltaSink` (monotonic MERGEs + tombstone cascade), `EntityMartSync` (glue
-  driver). Default suite **129/0**; the `EntityMartSinkIT` local Spark+Delta IT **3/3**.
-- **Sink IT (5/5) caught + proved four things:** `relationship` MERGE is column-wise `coalesce` (a
-  single endpoint's refresh no longer nulls the opposite direction); tombstone cascade uses
-  `MERGE ... WHEN MATCHED THEN DELETE` (OSS delta-spark rejects `IN (subquery)` DELETE); the **hash
-  change-gate** skips unchanged entities; the **orphan-record reconcile** removes a record deleted from a
-  surviving entity. It also **confirmed `CLUSTER BY`+DV+CDF DDL runs on OSS delta-spark 4.0.0** (§10).
-- **Best-practice alignment (Senzing-MCP data-mart-replicator):** matches the Entity Refresh Pattern,
-  explicit flags, tombstoning, relationship-both-directions, dedup, denormalized tables, canonical hash +
-  change-gate + orphan handling. The `sz_dm_report` aggregate tables are a different mart archetype
-  (analytics-reporting), not a gap — ours is the entity/relationship serving-map style; confirmed
-  acceptable 2026-08-08. See the entity-mart FAQ.
-- **Next (Phase 1.1 / 2, see NEXT_STEPS):** runtime smoke on the fleet (`run-entity-mart.sh` +
-  `--packages delta-spark`); `DatabricksUcSink`; Phase-2 orphan `getRecord`-verify + reconcile perf.
-- **Assumed answers to the plan's open questions** (confirm with user): O1 → the §7.4 flag set
-  (no raw `JSON_DATA`/candidate features); O2 → build for the **pure-sz_spark Databricks** target
-  (feed complete by construction); O4 → configurable sync cadence knob.
+- **Entity-mart replication Phase 1 + 1.1 (PR #10) + Phase 2 (PR #11) MERGED** — `EntityMartSchema`,
+  `GetCore`, `EntityMartRows`, `EntityMartSink`/`LocalDeltaSink`, `EntityMartSync`, `DatabricksUcSink`
+  (Unity-Catalog target), change-gate + orphan reconcile, tutorial Guide 07, Databricks deploy docs.
+  `EntityMartSinkIT` 5/5. Remaining = **Phase 3 live-infra validation** (needs a real Databricks cluster /
+  the fleet, not code) — see NEXT_STEPS.
+- **Feeder auto-recovery `FeederSupervisor` (PR #13) MERGED** — unit-validated; **NOT yet exercised
+  against the live engine on `.142`** (deploy/IT still pending) — see NEXT_STEPS.
+- **Source-agnostic overlapping-batch feeder + Kafka/Delta sources** — `ParquetParallelFeeder`,
+  `KafkaSource`, `DeltaSource`, `OverlappingBatchEngine`, dead-letter capture (all in v0.2.0's CHANGELOG).
 
-## ★ `.142` cut over to Kafka (operational — NAS + merged code, NOT git)
+## Background / operational state (fleet — NOT session tasks, verify don't rebuild)
 
-The `.142` drainer had run **ungated ~14h** (backpressure supervisor wasn't running), acking ~6k/s
-into parquet while the engine resolved ~1k/s — a **~235M-record parquet backlog** built up (hidden by
-an `ls part-*.parquet` ARG_MAX glob bug that read `inbox=0`). Resolution (all done this session):
-
-- **Migrated ~233.9M records parquet→Kafka** (topic `senzing-records` on `.100`, size-split: ≤15 MB →
-  Kafka, the 1-2 giant >15 MB records set aside to `/data/tmp/sz_spark_io/huge/`). Deleted the migrated
-  parquet → **freed 89 G on `.142`**.
-- **`.142` now runs the Kafka path:** `sz-spark-feeder` (`source=kafka`, draining the ~234M backlog at
-  ~1k/s DB-bound → **~65 h**, 0 failed), `sz-spark-bridge` (`MqToKafka`, RabbitMQ→Kafka for new records,
-  **correctly throttled** at `get/s=0` while the feeder is >5M behind), `sz-spark-redo`.
-- **`.141`** unaffected (~960/s). The affected-entity feed the kafka feeder emits carries every resolved
-  entity, so the entity-mart replication sees the backlog + new records regardless of source.
-
-Fixes made (all on the NAS `/public_data/perfscripts/sz_spark/`): `run-drainer.sh` gated-by-default;
-`SHARD_RECORDS`=1000 (was 5000 → 5× oversized batches); `run-feeder-kafka.sh`/`run-bridge.sh` got
-`--packages spark-sql-kafka-0-10` + ivy(`/tmp/ivy`) + `HOME=/tmp`; topic `max.message.bytes`=16 MB +
-14 d retention. Parity image on `.142`: `brian/sz_spark:local-618b47c2-dev-pq17` (bundled DEV engine).
-
-## Background / operational state at handoff (fleet, NOT session tasks)
-
-- `.142` `sz-spark-feeder` — Kafka feeder draining ~234M (~65 h). Log `feeder-kafka.out`.
-- `.142` `sz-spark-bridge` — throttled bridge. Log `bridge.out`. **Do NOT** run `run-drainer.sh` (parquet
-  path retired; would re-ack RabbitMQ into parquet).
-- `.142` `sz-spark-feeder-huge` — one-shot local drain of the 25 M huge residual; exits on `availableNow`.
-- `.142` `sz-spark-redo` — redo loop (`run-redo.sh`). `.100` `sz-kafka` — the Kafka broker (do NOT stop).
-- `.100` RabbitMQ publisher — do NOT kill. `.141` Rust fleet — untouched.
-
-## Uncommitted / next-session
-
-Working tree: `mart/EntityMartSchema.scala` (committed on this branch as the Phase-1 start). The Kafka
-cutover run scripts live on `/public_data` (not git). Next: continue the entity-mart Phase-1 build
-(order above); verify the ~234M backlog drains; the `huge/` residual exits cleanly.
+The `.142` Kafka cutover and the Sayari dual-host load are operational on the NAS
+(`/public_data/perfscripts/sz_spark/`), tracked in dbperf_test `.claude/SAYARI_LOAD_STATUS.md`.
+⛔ Do NOT run `run-drainer.sh` (retired parquet path). Do NOT stop `sz-kafka` / the publisher on `.100`.
+Do NOT touch the spark_er ODO run.

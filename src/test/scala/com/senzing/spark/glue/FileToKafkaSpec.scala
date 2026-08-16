@@ -49,4 +49,43 @@ final class FileToKafkaSpec extends AnyFunSuite with BeforeAndAfterAll {
       s"blank line dropped, bodies preserved verbatim, was $values"
     )
   }
+
+  test("shouldThrottle: true iff the feeder is at least maxLag behind the Kafka tail") {
+    // hwm - committed >= maxLag ⇒ pause producing.
+    assert(FileToKafka.shouldThrottle(hwm = 5_000_000L, committed = 0L, maxLag = 5_000_000L))
+    assert(FileToKafka.shouldThrottle(hwm = 6_000_000L, committed = 500_000L, maxLag = 5_000_000L))
+    // Just under the cap ⇒ keep producing.
+    assert(!FileToKafka.shouldThrottle(hwm = 4_999_999L, committed = 0L, maxLag = 5_000_000L))
+    // Feeder caught up ⇒ keep producing.
+    assert(
+      !FileToKafka.shouldThrottle(hwm = 5_000_000L, committed = 4_999_999L, maxLag = 5_000_000L)
+    )
+    // Empty topic ⇒ keep producing.
+    assert(!FileToKafka.shouldThrottle(hwm = 0L, committed = 0L, maxLag = 5_000_000L))
+  }
+
+  test("producible: only non-empty, non-null lines become Kafka messages") {
+    assert(FileToKafka.producible("{\"RECORD_ID\":\"1\"}"))
+    assert(!FileToKafka.producible(""))
+    assert(!FileToKafka.producible(null))
+  }
+
+  test("shouldProduce: skip then shard is disjoint + gapless across the union of shards") {
+    val skip = 100L
+    val shards = 2
+    // Everything below the resume point is skipped by BOTH shards.
+    assert(!FileToKafka.shouldProduce(gidx = 0L, skip, shards, shardIndex = 0))
+    assert(!FileToKafka.shouldProduce(gidx = 99L, skip, shards, shardIndex = 1))
+    // At/after the resume point, every index is owned by EXACTLY ONE shard (partition of the tail).
+    for (gidx <- 100L to 130L) {
+      val owned = (0 until shards).count(s => FileToKafka.shouldProduce(gidx, skip, shards, s))
+      assert(owned == 1, s"gidx=$gidx owned by $owned shards, expected exactly 1")
+    }
+    // Concretely: even index → shard 0, odd → shard 1.
+    assert(FileToKafka.shouldProduce(gidx = 100L, skip, shards, shardIndex = 0))
+    assert(!FileToKafka.shouldProduce(gidx = 100L, skip, shards, shardIndex = 1))
+    assert(FileToKafka.shouldProduce(gidx = 101L, skip, shards, shardIndex = 1))
+    // shards=1 ⇒ single producer owns the whole tail.
+    assert(FileToKafka.shouldProduce(gidx = 100L, skip, shards = 1, shardIndex = 0))
+  }
 }

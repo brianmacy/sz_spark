@@ -5,6 +5,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-16
+
+### Added
+- **`glue.FileToKafka` gains a throttled + resumable mode** — for a corpus far larger than the Kafka
+  broker's disk. When `checkpoint=` is passed, the producer switches from the batch `spark.read.text`
+  fire-hose to a **driver-side sequential** producer that:
+  - **throttles** to keep Kafka bounded — while the feeder is `≥ maxLag` (default 5,000,000) records
+    behind the topic tail it pauses, so Kafka only ever holds ~`maxLag` records instead of the whole
+    corpus (the same `lag = HWM − committedOffset` throttle the retired `MqToKafka` bridge used,
+    reusing `KafkaSource.boundaryOffset` + `OffsetWatermark.load` on the SHARED feeder checkpoint); and
+  - **resumes** — `skipRecords=N` drops the first N lines so a cut-over from another ingest path
+    starts near where it stopped instead of re-adding already-resolved records; and
+  - **shards** — `shards=S shardIndex=I` emits only the tail lines `gidx % S == I`, so S producers
+    over the same corpus feed S disjoint single-partition topics with no gap/overlap. This is how a
+    multi-host load keeps full throughput: `KafkaSource` is single-partition/single-feeder by design,
+    so parallelism comes from one topic (and one feeder) per host, not Kafka partitions.
+  New args: `checkpoint` (selects throttled mode), `maxLag`, `skipRecords`, `shards`, `shardIndex`,
+  `checkEvery` (default 50,000), `throttlePauseMs` (default 1,000). The simple batch `run` (no
+  `checkpoint`) is unchanged.
+  Compression (`.bz2`/`.gz`) is decoded via Hadoop's `CompressionCodecFactory` (jobs launch under
+  `spark-submit`). Pure `shouldThrottle` + `producible` covered by `FileToKafkaSpec`.
+
 ## [0.2.0] - 2026-08-16
 
 ### Added

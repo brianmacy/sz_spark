@@ -145,8 +145,7 @@ object ParquetParallelFeeder extends SparkJob {
           OverlappingBatchEngine.run(
             spark,
             source,
-            process = (ds, staging) => AddCore.run(spark, ds, runId, staging),
-            stagingBase = m.getOrElse("staging", "staging"),
+            process = ds => AddCore.run(spark, ds, runId),
             deadLetter = m.getOrElse("deadLetter", ""),
             output = m.getOrElse("output", ""),
             recordsPerBatch = recordsPerBatch,

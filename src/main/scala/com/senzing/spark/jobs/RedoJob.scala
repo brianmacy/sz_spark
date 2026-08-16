@@ -15,9 +15,11 @@ object RedoJob extends SparkJob {
     val a = JobArgs.parse(args)
     val spark = buildSession("sz-redo")
     try {
-      val res = RedoCore.run(spark, a.runId, a.stagingPath, a.redoBatch, a.partitions)
-      res.good.write.mode(SaveMode.Overwrite).parquet(a.outputPath)
-      res.errors.write.mode(SaveMode.Overwrite).parquet(a.errorPath)
+      val res = RedoCore.run(spark, a.runId, a.redoBatch, a.partitions)
+      try {
+        res.good.write.mode(SaveMode.Overwrite).parquet(a.outputPath)
+        res.errors.write.mode(SaveMode.Overwrite).parquet(a.errorPath)
+      } finally res.unpersist()
     } finally spark.stop()
   }
 }

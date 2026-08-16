@@ -70,10 +70,8 @@ final class SparkRecordOpsSpec extends AnyFunSuite with BeforeAndAfterAll {
       InputRecord("C", "bad", "p")
     )
     val ds = recs.toDS()
-    val staging = Files.createTempDirectory("staging").toFile
-    staging.delete()
 
-    val res = SparkRecordOps.run(ss, ds, staging.getAbsolutePath, mkWorker _, acquire _, release _)
+    val res = SparkRecordOps.run(ss, ds, mkWorker _, acquire _, release _)
 
     val good = res.good.collect()
     val errs = res.errors.collect()

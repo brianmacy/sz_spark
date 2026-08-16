@@ -12,9 +12,11 @@ object DeleteJob extends SparkJob {
     try {
       val input =
         randomRepartition(RecordJob.readRecords(spark, a.input), a.partitions)
-      val res = DeleteCore.run(spark, input, a.runId, a.stagingPath)
-      res.good.write.mode(SaveMode.Overwrite).parquet(a.outputPath)
-      res.errors.write.mode(SaveMode.Overwrite).parquet(a.errorPath)
+      val res = DeleteCore.run(spark, input, a.runId)
+      try {
+        res.good.write.mode(SaveMode.Overwrite).parquet(a.outputPath)
+        res.errors.write.mode(SaveMode.Overwrite).parquet(a.errorPath)
+      } finally res.unpersist()
     } finally spark.stop()
   }
 }

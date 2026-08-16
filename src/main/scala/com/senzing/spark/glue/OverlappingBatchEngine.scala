@@ -5,7 +5,6 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicLong, AtomicReference}
 
 import scala.util.control.NonFatal
 
-import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.functions.{current_timestamp, lit}
 import org.apache.spark.sql.{Dataset, SparkSession}
 
@@ -78,13 +77,10 @@ object OverlappingBatchEngine {
   /** Outcome counts — returned for tests and logged at shutdown. */
   final case class Stats(processedChunks: Long, failedChunks: Long)
 
-  private def sanitize(bounds: String): String = bounds.replaceAll("[^A-Za-z0-9_.-]", "_")
-
   def run(
       spark: SparkSession,
       source: RecordSource,
-      process: (Dataset[InputRecord], String) => SplitResult,
-      stagingBase: String,
+      process: Dataset[InputRecord] => SplitResult,
       deadLetter: String,
       output: String,
       recordsPerBatch: Int,
@@ -140,23 +136,26 @@ object OverlappingBatchEngine {
     }
 
     def processOne(chunk: Chunk): Unit = {
-      val staging = new Path(stagingBase, sanitize(chunk.bounds)).toString
       inFlight.incrementAndGet()
       try {
         // 1 partition (the default operating point) ⇒ NO repartition/shuffle: the batch is a single
         // task that commits on its own, so a straggler holds exactly one slot and blocks nothing.
         val df = if (partitionsPerChunk > 1) chunk.df.repartition(partitionsPerChunk) else chunk.df
-        val result = process(df, staging)
-        // Per-chunk single-file sinks (unique names) — concurrency-safe, unlike Append.
-        if (deadLetter.nonEmpty) {
-          val errs = result.errors
-            .withColumn("failedAt", current_timestamp())
-            .withColumn("source", lit(sourceName))
-          ShardIo.writeSingleFile(spark, errs, deadLetter, "de")
-        }
-        if (output.nonEmpty) ShardIo.writeSingleFile(spark, result.good, output, "af")
-        source.commit(chunk.bounds) // chunk is in the engine — dispose / advance watermark
-        ShardIo.deleteQuietly(ShardIo.fileSystem(spark, staging), new Path(staging))
+        // `process` runs the engine once and MATERIALIZES the result in Spark's distributed cache
+        // (no host-local staging file — works with executors on any host). Free the cache once the
+        // sinks + commit have read good/errors, whether they succeed or throw.
+        val result = process(df)
+        try {
+          // Per-chunk single-file sinks (unique names) — concurrency-safe, unlike Append.
+          if (deadLetter.nonEmpty) {
+            val errs = result.errors
+              .withColumn("failedAt", current_timestamp())
+              .withColumn("source", lit(sourceName))
+            ShardIo.writeSingleFile(spark, errs, deadLetter, "de")
+          }
+          if (output.nonEmpty) ShardIo.writeSingleFile(spark, result.good, output, "af")
+          source.commit(chunk.bounds) // chunk is in the engine — dispose / advance watermark
+        } finally result.unpersist()
         consecutiveFailures.set(
           0
         ) // a success means the cluster is alive — clear the run of failures

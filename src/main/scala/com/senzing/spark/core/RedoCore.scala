@@ -16,7 +16,6 @@ object RedoCore {
   def run(
       spark: SparkSession,
       runId: String,
-      stagingPath: String,
       redoBatch: Int,
       partitions: Int
   ): SplitResult = {
@@ -35,7 +34,6 @@ object RedoCore {
     SparkRecordOps.run(
       spark,
       input,
-      stagingPath,
       EngineWorker.factory(WorkerOp.Redo, runId, Verbs.redo),
       release = () => SzEngineProvider.release()
     )

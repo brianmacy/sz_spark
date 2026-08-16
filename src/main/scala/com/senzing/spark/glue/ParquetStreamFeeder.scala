@@ -98,7 +98,8 @@ object ParquetStreamFeeder extends SparkJob {
         val input = batchDf.as[InputRecord]
         // No repartition (see class doc): file-partitions feed the slots directly; read+add fuse.
         val result = process(input)
-        writeSinks(result, deadLetter, output)
+        try writeSinks(result, deadLetter, output)
+        finally result.unpersist() // free the materialized cache once the sinks have read it
         ()
       }
 
@@ -109,7 +110,6 @@ object ParquetStreamFeeder extends SparkJob {
 
   def main(args: Array[String]): Unit = {
     val m = GlueArgs.parse(args)
-    val staging = m.getOrElse("staging", "staging")
     val runId = m.getOrElse("runId", "run")
     val spark = buildSession("sz-parquet-stream-feeder")
     try {
@@ -122,7 +122,7 @@ object ParquetStreamFeeder extends SparkJob {
         trigger = m.getOrElse("trigger", "default"),
         deadLetter = m.getOrElse("deadLetter", ""),
         output = m.getOrElse("output", ""),
-        process = ds => AddCore.run(spark, ds, runId, staging)
+        process = ds => AddCore.run(spark, ds, runId)
       )
       query.awaitTermination()
     } finally spark.stop()

@@ -5,6 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-16
+
+### Changed
+- **Feeder chunk processing is in-memory — no host-local staging.** `SparkRecordOps` (the shared
+  Add/Delete/Search/Redo engine pipeline) previously staged each chunk to a parquet file, then read it
+  back to split good/errors. On a **multi-host** Spark cluster (one feeder driver, executors on both
+  hosts) that host-local staging file is invisible to an executor on the other host
+  (`FileNotFoundException`), and a shared-NFS staging path fails on container-uid squash
+  (`Mkdirs failed`). Replaced the stage-write/read-back with **`persist(MEMORY_AND_DISK)` + `count()`**
+  to force the single engine pass: Spark's block manager materializes the tagged-union result in
+  distributed storage (no filesystem path), so it works with executors on any host, and the engine
+  still runs **exactly once** per record (no double-add). `SplitResult` gains an `unpersist()` the
+  caller invokes after the sinks. `stagingPath`/`stagingBase` args dropped from `SparkRecordOps`,
+  `AddCore`/`DeleteCore`/`SearchCore`/`RedoCore`, `OverlappingBatchEngine`, and the batch jobs.
+  145/0 unit (incl. "engine runs exactly once per record").
+
 ## [0.2.2] - 2026-08-16
 
 ### Changed

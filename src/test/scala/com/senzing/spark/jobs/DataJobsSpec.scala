@@ -51,9 +51,7 @@ final class DataJobsSpec extends AnyFunSuite with BeforeAndAfterAll {
     val ss = spark
     import ss.implicits._
     val ds = recs.toDS()
-    val staging = Files.createTempDirectory("staging").toFile
-    staging.delete()
-    SparkRecordOps.run(ss, ds, staging.getAbsolutePath, () => worker(op, verb)).good.collect()
+    SparkRecordOps.run(ss, ds, () => worker(op, verb)).good.collect()
   }
 
   test("add job tags affected-entity rows ADD") {

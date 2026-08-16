@@ -50,27 +50,24 @@ object ParquetParallelFeederSpec {
    * Counts rows via the PER-CHUNK staging (a shared staging path would corrupt counts under
    * concurrency); returns an empty split.
    */
-  def countingProcess(ds: Dataset[InputRecord], staging: String): SplitResult = {
+  def countingProcess(ds: Dataset[InputRecord]): SplitResult = {
     val ss = ds.sparkSession
-    ds.write.mode(SaveMode.Overwrite).parquet(staging)
-    rowCount.addAndGet(ss.read.parquet(staging).count())
+    rowCount.addAndGet(ds.count())
     val empty = ss.emptyDataFrame
     SplitResult(empty, empty)
   }
 
-  /** `bad*` → BAD_INPUT error row, else an affected-entity good row (via per-chunk staging). */
-  def splitProcess(ds: Dataset[InputRecord], staging: String): SplitResult = {
+  /** `bad*` → BAD_INPUT error row, else an affected-entity good row (in-memory split). */
+  def splitProcess(ds: Dataset[InputRecord]): SplitResult = {
     val ss = ds.sparkSession
     import ss.implicits._
-    ds.write.mode(SaveMode.Overwrite).parquet(staging)
-    val back = ss.read.parquet(staging).as[InputRecord]
-    val errors = back
+    val errors = ds
       .filter(_.recordId.startsWith("bad"))
       .map(r =>
         ErrorRow(r.dataSource, r.recordId, r.payload, ErrorCategory.BadInput.name, "", "e", 0)
       )
       .toDF()
-    val good = back
+    val good = ds
       .filter(!_.recordId.startsWith("bad"))
       .map(r => AffectedEntityRow(r.dataSource, r.recordId, 1L, "ADD", "run"))
       .toDF()
@@ -78,7 +75,7 @@ object ParquetParallelFeederSpec {
   }
 
   /** Throws on any chunk containing a `boom` record (a systemic-style failure). */
-  def failProcess(ds: Dataset[InputRecord], staging: String): SplitResult = {
+  def failProcess(ds: Dataset[InputRecord]): SplitResult = {
     val ids = ds.collect().map(_.recordId).toSet
     if (ids.contains("boom")) throw new RuntimeException("boom")
     val ss = ds.sparkSession
@@ -91,7 +88,7 @@ object ParquetParallelFeederSpec {
   /**
    * The slow chunk blocks until BOTH fast chunks have run — proving they were not queued behind it.
    */
-  def overlapProcess(ds: Dataset[InputRecord], staging: String): SplitResult = {
+  def overlapProcess(ds: Dataset[InputRecord]): SplitResult = {
     val ss = ds.sparkSession
     import ss.implicits._
     val ids = ds.collect().map(_.recordId).toSet
@@ -138,7 +135,7 @@ final class ParquetParallelFeederSpec extends AnyFunSuite with BeforeAndAfterAll
 
   private def runEngine(
       source: RecordSource,
-      process: (Dataset[InputRecord], String) => SplitResult,
+      process: Dataset[InputRecord] => SplitResult,
       maxUnprocessedBatches: Int = 2,
       deadLetter: String = "",
       output: String = ""
@@ -147,7 +144,6 @@ final class ParquetParallelFeederSpec extends AnyFunSuite with BeforeAndAfterAll
       spark,
       source,
       process,
-      stagingBase = tmp("staging").getAbsolutePath,
       deadLetter = deadLetter,
       output = output,
       recordsPerBatch = 1000, // => 1 partition/batch (the production operating point; no shuffle)

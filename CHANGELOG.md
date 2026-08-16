@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-16
+
 ### Added
 - **`glue.FileToKafka` — on-prem JSONL→Kafka producer.** Loads a corpus file (optionally `.bz2`/`.gz`)
   straight into the topic `KafkaSource` reads: each line becomes one Kafka message value (raw body).

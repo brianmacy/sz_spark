@@ -96,9 +96,12 @@ Reference gaps status (tracked in NEXT_STEPS): (1) **✅ hash change-gate wired*
 `EntityMartSink.selectChanged` drops entities whose stored `entity_hash` is unchanged before frames are
 built ("skip if unchanged"); the canonical hash uses US/RS separators (collision-safety). (2) **✅
 orphan-record reconcile** — `reconcileDepartedRecords` removes an `entity_record` row when its record
-leaves a surviving entity (delete); a MOVE is re-keyed by the gaining entity's refresh. ⚠ Phase-2
-hardening: if the gaining entity of a move is not in the same batch the row is briefly deleted +
-re-inserted (eventual consistency) — the reference's `getRecord`-verify sweep avoids the transient. (3)
+leaves a surviving entity (delete); a MOVE is re-keyed by the gaining entity's refresh. ✅ **Phase-2
+hardening DONE**: departed candidates pass through the injected `verifyDeparted` seam (default identity,
+so `AbstractDeltaSink` stays engine-free); `EntityMartSync` wires the engine-backed `DepartedVerify`,
+which `getRecord`-checks each candidate and deletes only those confirmed genuinely gone (`SzNotFound`) —
+a record that moved to an out-of-batch entity survives and is re-keyed by the gaining entity's refresh,
+eliminating the transient delete/re-insert. (3)
 the aggregate report tables (`sz_dm_report` DSS/CSS/ESB/ERB + deferred `sz_dm_pending_report`) are
 **deliberately not built — a different mart archetype, not a gap.** The reference's `sz_dm_report` is the
 *analytics/reporting* mart style (pre-aggregated ER-quality stats). Ours is the *entity/relationship
@@ -106,7 +109,7 @@ serving-map* style (the live denormalized entity + record + relationship project
 user queries directly). `sz_dm_report` is one pattern for one mart style; a lakehouse consumer aggregates
 over our map with the doc's own SQL patterns (which run against exactly our `entity`/`entity_record`/
 `relationship` shape). Confirmed acceptable 2026-08-08. Both (1) and (2) are proven by `EntityMartSinkIT`
-(5 cases).
+(6 cases, incl. the Phase-2 selective orphan-verify: verified-gone deleted, moved survives).
 
 Our column naming differs from the reference (`entity`/`entity_record`/`relationship` +
 `entity_id_lo`/`entity_id_hi` vs `sz_dm_entity`/`sz_dm_record`/`sz_dm_relation` + `related_id`); the

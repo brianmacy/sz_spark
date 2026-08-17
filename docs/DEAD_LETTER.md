@@ -88,6 +88,41 @@ sweep) is still an operational cron/supervisor decision — but the archive step
 self-cleaning, not a re-emit-everything hazard. Covered by `DeadLetterReprocessSpec` (re-emit once,
 archive, second pass = 0).
 
+### Single-process reprocessor (`jobs.DeadLetterJob`) — the convergent, contention-safe driver
+`DeadLetterReprocess` above is the one-pass primitive. `jobs.DeadLetterJob` is the **runnable job**
+that wraps it in a **bounded, convergent loop** and enforces the single-process re-drive.
+
+Why a loop, not one pass: reprocessing the DLQ tends to **create more DLQ** (a re-driven record can
+fail again), and `selectReprocessable` drops `attempts`, so a re-failed record starts a fresh
+`ErrorRow` with no cross-generation memory — a naive loop would re-drive a genuinely-stuck record
+forever. Each round sweeps generation *r* → re-feed inbox → **serial re-drive** → this round's
+failures land in generation *r+1*.
+
+Why single-process is the point (not just "less contention"): the re-drive runs `master=local[1]`
+and the inbox is `coalesce(1)`'d, so the Senzing verb runs on **one thread, engine initialized
+once**. That REMOVES the concurrency that produces `REPLACE_CONFLICT` (the dominant reprocessable
+category is a lock/replace race) and gives `RETRY_EXHAUSTED` a fresh budget — a serial pass drains
+the bulk of the queue by construction.
+
+Termination (bounded rounds + shrink check — no schema change):
+- **drained** — the sweep finds nothing reprocessable, or a round's residue is empty;
+- **not shrinking** — a round's reprocessable residue did not fall below what it re-drove (zero
+  progress) ⇒ the residue is genuinely stuck;
+- **cap** — `maxRounds` (default 3) reached.
+
+On any non-drained stop the final generation is moved to `quarantine=` for human review and never
+re-driven again. Re-driven **successes** append to the `output=` `$AFFECTED` feed so the entity-mart
+sees them. Covered by `DeadLetterJobSpec` (drain, shrink-stop→quarantine, maxRounds cap).
+
+```
+spark-submit --class com.senzing.spark.jobs.DeadLetterJob sz-spark-assembly.jar \
+  deadLetter=$IO_BASE/deadletter  work=$IO_BASE/deadletter-reprocess \
+  quarantine=$IO_BASE/deadletter-quarantine  output=$IO_BASE/affected \
+  runId=dlq-reprocess  maxRounds=3
+```
+(The job pins `master=local[1]` itself — do NOT override it with a multi-core master, or you
+reintroduce the very concurrency the single process exists to remove.)
+
 ### Kafka-path re-drive
 The dead-letter sink is engine-level (`OverlappingBatchEngine`), so it is identical for all sources —
 `InboxSource`, **`KafkaSource`**, and `DeltaSource`. There is no Kafka-specific re-drive: run

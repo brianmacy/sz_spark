@@ -1,8 +1,11 @@
 package com.senzing.spark.mart
 
+import java.util.UUID
+
 import org.apache.hadoop.fs.Path
-import org.apache.spark.sql.{Dataset, SparkSession}
+import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
 import org.apache.spark.sql.functions.col
+import org.apache.spark.storage.StorageLevel
 
 import com.senzing.spark.glue.{GlueArgs, ShardIo}
 import com.senzing.spark.jobs.SparkJob
@@ -58,11 +61,21 @@ object EntityMartSync extends SparkJob {
     try {
       // Same MERGE/DELETE logic (AbstractDeltaSink) either way — the sink only decides table NAMING:
       // a path table for the local proxy, a Unity Catalog `catalog.schema` for Databricks.
+      // Engine-backed orphan-departure verifier (Phase-2): only records `getRecord` confirms gone
+      // are deleted from entity_record; a moved record survives. Each call stages under a unique
+      // subdir so concurrent/looped refreshes never collide.
+      val verifier: DataFrame => DataFrame =
+        (candidates: DataFrame) =>
+          DepartedVerify.run(
+            spark,
+            candidates,
+            s"${staging.stripSuffix("/")}/verify-${UUID.randomUUID()}"
+          )
       val sink: EntityMartSink = sinkKind match {
         case "uc" | "databricks" =>
           val (catalog, schema) = DatabricksUcSink.parseTarget(martBase)
-          new DatabricksUcSink(spark, catalog, schema)
-        case _ => new LocalDeltaSink(spark, martBase)
+          new DatabricksUcSink(spark, catalog, schema, verifier)
+        case _ => new LocalDeltaSink(spark, martBase, verifier)
       }
       sink.initTables()
       trigger match {
@@ -96,14 +109,21 @@ object EntityMartSync extends SparkJob {
       .distinct()
 
     val results = GetCore.run(spark, ids, s"${staging.stripSuffix("/")}/get-$refreshSeq")
-    // Change-gate: parse, drop entities whose stored hash is unchanged, then build frames from the rest
-    // (the Entity Refresh Pattern's "skip if unchanged"). Tombstones ride `results`, so GONE bypasses.
-    val changed = sink.selectChanged(EntityMartRows.parse(spark, results))
-    val frames = EntityMartRows.framesOf(spark, changed, results)
-    sink.upsert(frames, refreshSeq)
-    sink.quarantine(results.filter(_.kind == GetKind.Error).toDF(), refreshSeq)
-    sink.writeState(StateRefreshSeq, refreshSeq.toString)
-    println(s"[entity-mart-sync] applied refresh_seq=$refreshSeq")
+    // Materialize the parsed entities ONCE (Phase-2): `parse` runs Jackson per GetResult and is
+    // consumed by the change-gate join AND all four frame builds — persisting it here collapses
+    // ~5 re-parses into one. In-memory (block manager), not a host-local file, per the v0.3.0 idiom.
+    val parsed = EntityMartRows.parse(spark, results).persist(StorageLevel.MEMORY_AND_DISK)
+    try {
+      parsed.count() // force the single parse pass now
+      // Change-gate: drop entities whose stored hash is unchanged, then build frames from the rest
+      // (the Entity Refresh Pattern's "skip if unchanged"). Tombstones ride `results`, so GONE bypasses.
+      val changed = sink.selectChanged(parsed)
+      val frames = EntityMartRows.framesOf(spark, changed, results)
+      sink.upsert(frames, refreshSeq)
+      sink.quarantine(results.filter(_.kind == GetKind.Error).toDF(), refreshSeq)
+      sink.writeState(StateRefreshSeq, refreshSeq.toString)
+      println(s"[entity-mart-sync] applied refresh_seq=$refreshSeq")
+    } finally parsed.unpersist(blocking = false)
   }
 
   private def feedHasShards(spark: SparkSession, feed: String): Boolean = {

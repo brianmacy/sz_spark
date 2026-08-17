@@ -187,4 +187,27 @@ final class EntityMartSinkIT extends AnyFunSuite with BeforeAndAfterAll {
     applyParsed(sink, refreshSeq = 21, parsed(2L, "Hb", Seq(("DSo", "A1"))))
     assert(recordIds(2L) == Set("A1"), "departed record A2 reconciled away")
   }
+
+  test(
+    "orphan verify (Phase-2): only verifier-confirmed-gone records are deleted; moved records survive",
+    IntegrationTest
+  ) {
+    // Engine-backed verifier stand-in: A2 is genuinely gone, A3 merely MOVED (still exists) ⇒ the
+    // verifier returns only A2, so A3 must NOT be reconciled away (it is re-keyed by its gaining
+    // entity's own refresh). Proves the DepartedVerify seam short-circuits the Phase-1 delete.
+    val verifier: DataFrame => DataFrame = df => df.filter("record_id = 'A2'")
+    val sink = new LocalDeltaSink(spark, base, verifier)
+    sink.initTables()
+    applyParsed(
+      sink,
+      refreshSeq = 30,
+      parsed(3L, "Hc", Seq(("DSo", "A1"), ("DSo", "A2"), ("DSo", "A3")))
+    )
+    assert(recordIds(3L) == Set("A1", "A2", "A3"), "all three records present after first refresh")
+
+    // Entity 3 refreshes with only A1 ⇒ A2 and A3 both depart the fresh set; the verifier confirms
+    // only A2 gone.
+    applyParsed(sink, refreshSeq = 31, parsed(3L, "Hd", Seq(("DSo", "A1"))))
+    assert(recordIds(3L) == Set("A1", "A3"), "A2 (verified gone) deleted; A3 (moved) survived")
+  }
 }

@@ -1,8 +1,35 @@
 # Project Status
 
-**Date:** 2026-08-16
-**Branch:** `main` — **v0.2.0 released** (tag `v0.2.0` on merge commit `a6b34f1`, GitHub release published).
-Working tree clean. Last shipped PR: **#17** (Kafka producer + idempotent DLQ re-drive).
+**Date:** 2026-08-18
+**Branch:** `bem_redo_continuous` @ `cd3c8b9` (+ uncommitted scalafmt reflow of `RedoJob.scala`; not yet pushed, no PR).
+Base `main` is at **v0.3.0** (`1317973`, in-memory feeder chunk processing). Prior release: **v0.2.0** (tag
+`v0.2.0` @ `a6b34f1`, PR #17 — Kafka producer + idempotent DLQ re-drive).
+
+## ★ Current session — continuous redoer (`bem_redo_continuous` @ `cd3c8b9`)
+
+`RedoJob` now drains the engine redo queue in **one long-lived Spark session** instead of run-once +
+external relaunch, eliminating the ~30-60 s Spark teardown/startup burned every ~10 min relaunch cycle.
+Deployed live to the `.141` redo container (image `v0.3.0-redocont-20260818T13`).
+
+- **`RedoCore` split into `drain` / `process`** — driver-side `getRedoRecord()` drain returns a bounded
+  batch (may be empty); `process` fans a **non-empty** batch to the executors (`processRedoRecord`
+  WITH_INFO). Empty queue skips ALL Spark work (no repartition/shuffle/empty job).
+- **`RedoJob` loop** — drain → if empty, pause `redoPauseMs` (new `JobArgs` field, default 30000) and
+  re-poll; else process + **append**. Runs until SIGTERM / container stop.
+- **Overwrite → Append (data-loss fix)** — the run-once `Overwrite` clobbered the failed-redo dead-letter
+  (`errorPath`, which must accumulate) and prior output on every relaunch. Both paths now append.
+- **Graceful shutdown** — shutdown hook sets `stopping`; pause polls it (wakes within ~0.5 s); loop exits
+  only BETWEEN batches (residual hard-kill loss = one in-flight batch, bounded by `redoBatch`).
+  `NonFatal` failures logged and loop continues; only fatal errors exit.
+
+### Verification this session (independent /prep FAST)
+- `sbt scalafmtCheckAll` — FAILED on `RedoJob.scala`, auto-fixed with `scalafmtAll` (comment reflow only);
+  re-check clean. **The fix is uncommitted in the working tree — fold it into `cd3c8b9` before push.**
+- `sbt compile Test/compile test` — **145/145 unit tests pass, 37 suites, 0 aborted** (RedoSourceSpec
+  green; `EngineIT`/`EntityMartSinkIT` self-skip without `SZ_IT=1` + live engine — expected).
+- Supply-chain (floating deps) clean; CI actions SHA-pinned; dependabot cooldown 21 d. Untracked
+  `sz-spark-assembly.jar` (318 MB build artifact) at repo root — gitignore pattern `*-assembly-*.jar`
+  does NOT match it; remove or fix the pattern, do NOT commit it.
 
 ## ★ v0.2.0 — shipped (main @ `a6b34f1`, tag `v0.2.0`)
 

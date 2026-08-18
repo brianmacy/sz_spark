@@ -13,7 +13,8 @@ final case class JobArgs(
     stagingPath: String,
     partitions: Int,
     runId: String,
-    redoBatch: Int
+    redoBatch: Int,
+    redoPauseMs: Long
 )
 object JobArgs {
   def parse(args: Array[String]): JobArgs = {
@@ -29,7 +30,8 @@ object JobArgs {
       stagingPath = m.getOrElse("staging", "staging"),
       partitions = m.getOrElse("partitions", "0").toInt,
       runId = m.getOrElse("runId", "run"),
-      redoBatch = m.getOrElse("redoBatch", "100000").toInt
+      redoBatch = m.getOrElse("redoBatch", "100000").toInt,
+      redoPauseMs = m.getOrElse("redoPauseMs", "30000").toLong
     )
   }
 }

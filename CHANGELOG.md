@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+- **Redoer is continuous — one long-lived Spark session drains until SIGTERM, no per-batch teardown.**
+  `RedoJob` previously ran once (drain the currently-pending queue, write, exit) and relied on an
+  external scheduler to relaunch it every ~10 min; each relaunch burned ~30-60 s of Spark
+  teardown/startup. It now loops in a single session: `RedoCore.drain` pulls a bounded batch on the
+  driver via `getRedoRecord()`, `RedoCore.process` fans a **non-empty** batch out to the executors
+  (`processRedoRecord` WITH_INFO), and on an empty queue it pauses `redoPauseMs` (new `JobArgs` field,
+  default 30000) and re-polls — `getRedoRecord()==null` means "empty right now", not "done". `drain`
+  and `process` are split so an empty queue skips ALL Spark work (no repartition/shuffle/empty job).
+- **Redo output/error writes are `Append`, not `Overwrite` (data-loss fix).** In the run-once model
+  every relaunch `Overwrite` clobbered the prior run's output and — critically — the failed-redo
+  dead-letter (`errorPath`), which must accumulate. The continuous loop appends both paths.
+- **Graceful shutdown + crash resilience.** A shutdown hook sets a `stopping` flag that the pause polls
+  (waking within ~0.5 s), and the loop only exits BETWEEN batches, so a drained-but-unprocessed batch
+  is always processed before exit (residual loss window on hard-kill is one in-flight batch, bounded by
+  `redoBatch`). Transient (`NonFatal`) failures are logged and the loop continues; only a fatal error
+  exits. `RedoSourceSpec` green.
+
 ## [0.4.0] - 2026-08-17
 
 ### Added

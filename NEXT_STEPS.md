@@ -1,8 +1,20 @@
 # Next Steps
 
-**Branch:** `main` — **v0.2.0 released** (tag `v0.2.0` @ merge commit `a6b34f1`). No open PR.
-End-user surface is shipped and consumable: `main` at a tagged v0.2.0 with CI-green unit tests,
-`EngineIT` 5/5, and current user-facing docs (README, CHANGELOG, tutorial Guides, kafka/DLQ FAQ).
+**Branch:** `bem_redo_continuous` @ `80a69ec` (code) + `248d95b` (docs) — **pushed; PR [#23](https://github.com/brianmacy/sz_spark/pull/23)** (CI running). Base `main` @ v0.3.0.
+Unit suite green (145/145); deployed live to the `.141` redo container (`v0.3.0-redocont-20260818T13`).
+
+## NOW: land the continuous redoer (`bem_redo_continuous`)
+
+✅ DONE: scalafmt fix folded into `80a69ec`; `sz-spark-assembly.jar` gitignored (`*-assembly.jar`);
+pushed; PR [#23](https://github.com/brianmacy/sz_spark/pull/23) opened with full description.
+
+1. **Monitor PR #23 CI** (`scalafmtCheckAll` + `sbt test`, no SZ_IT) → merge when green.
+4. **Watch `SYS_EVAL_QUEUE` on the live `.141` redoer** — if the queue grows faster than the continuous
+   loop drains, raise redo parallelism (more `partitions` / redo cores) rather than shrinking `redoPauseMs`
+   (the pause only matters on an empty queue). `redoPauseMs` default 30000 mirrors the canonical worker.
+5. **Consider a live-engine IT for the continuous loop** (`SZ_IT=1`): drain-append across multiple batches,
+   confirm the dead-letter accumulates and SIGTERM exits cleanly between batches with no drained-but-unprocessed
+   batch lost.
 
 ## NOW: validate + deploy feeder auto-recovery on `.142` (PR #13, merged, unit-only)
 

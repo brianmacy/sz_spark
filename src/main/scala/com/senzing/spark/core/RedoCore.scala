@@ -7,30 +7,32 @@ import com.senzing.spark.work.{InputRecord, WorkerOp}
 
 /**
  * Core redoer: the intentional self-sourced exception. Its "source" is the engine's own
- * `SYS_EVAL_QUEUE` (`getRedoRecord`, driver-side), not an external transport, so it has no glue. A
- * single driver-side dequeuer pulls a bounded batch (RedoSource), which is repartitioned and
- * processed in parallel via the shared engine (`processRedoRecord` WITH_INFO). An empty batch
- * yields empty good/error frames (SparkRecordOps on an empty Dataset).
+ * `SYS_EVAL_QUEUE` (`getRedoRecord`, driver-side), not an external transport, so it has no glue.
+ * `drain` pulls a bounded batch on the driver (one consumer of the global queue); `process` fans a
+ * NON-EMPTY batch out to the executors via the shared engine (`processRedoRecord` WITH_INFO). They
+ * are split so the continuous caller can skip ALL Spark work (repartition/shuffle/empty job) when
+ * the queue is currently empty.
  */
 object RedoCore {
-  def run(
+
+  /** Driver-side single dequeuer: drain up to `redoBatch` redo records (may return empty). */
+  def drain(redoBatch: Int): Seq[String] = {
+    val env = SzEngineProvider.acquire()
+    val engine = env.getEngine()
+    try RedoSource.drainBatch(() => engine.getRedoRecord(), redoBatch)
+    finally SzEngineProvider.release()
+  }
+
+  /** Process an already-drained, NON-EMPTY batch in parallel. */
+  def process(
       spark: SparkSession,
       runId: String,
-      redoBatch: Int,
+      batch: Seq[String],
       partitions: Int
   ): SplitResult = {
     import spark.implicits._
-
-    // Driver-side single dequeuer (one consumer of the global queue).
-    val env = SzEngineProvider.acquire()
-    val engine = env.getEngine()
-    val batch =
-      try RedoSource.drainBatch(() => engine.getRedoRecord(), redoBatch)
-      finally SzEngineProvider.release()
-
     val base = batch.toDS.map(s => InputRecord("REDO", "", s))
     val input = if (partitions > 0) base.repartition(partitions) else base
-
     SparkRecordOps.run(
       spark,
       input,

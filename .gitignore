@@ -19,6 +19,7 @@ src/main/resources/native/
 **/.debs/
 build/libs/
 *-assembly-*.jar
+*-assembly.jar
 # NOTE: config/overrides/ is intentionally NOT ignored — those are the
 # user's own customized config files, fine to commit and ship.
 

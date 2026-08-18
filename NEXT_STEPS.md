@@ -1,16 +1,14 @@
 # Next Steps
 
-**Branch:** `bem_redo_continuous` @ `cd3c8b9` — continuous redoer. Not pushed, no PR. Base `main` @ v0.3.0.
+**Branch:** `bem_redo_continuous` @ `80a69ec` (code) + `248d95b` (docs) — **pushed; PR [#23](https://github.com/brianmacy/sz_spark/pull/23)** (CI running). Base `main` @ v0.3.0.
 Unit suite green (145/145); deployed live to the `.141` redo container (`v0.3.0-redocont-20260818T13`).
 
 ## NOW: land the continuous redoer (`bem_redo_continuous`)
 
-1. **Fold the uncommitted scalafmt reflow into `cd3c8b9`** (`RedoJob.scala` comment rewrap; `git commit
-   --amend` or a fixup) — the committed tree currently fails `scalafmtCheckAll` and would go CI-red.
-2. **Do NOT commit `sz-spark-assembly.jar`** (318 MB build artifact, untracked at repo root). Either
-   `rm` it or fix `.gitignore` — the current pattern `*-assembly-*.jar` does not match `sz-spark-assembly.jar`.
-3. **Push branch + open PR**; monitor CI (`scalafmtCheckAll` + `sbt test`, no SZ_IT). Title/description
-   must describe the run-once → continuous shift and the Overwrite→Append dead-letter data-loss fix.
+✅ DONE: scalafmt fix folded into `80a69ec`; `sz-spark-assembly.jar` gitignored (`*-assembly.jar`);
+pushed; PR [#23](https://github.com/brianmacy/sz_spark/pull/23) opened with full description.
+
+1. **Monitor PR #23 CI** (`scalafmtCheckAll` + `sbt test`, no SZ_IT) → merge when green.
 4. **Watch `SYS_EVAL_QUEUE` on the live `.141` redoer** — if the queue grows faster than the continuous
    loop drains, raise redo parallelism (more `partitions` / redo cores) rather than shrinking `redoPauseMs`
    (the pause only matters on an empty queue). `redoPauseMs` default 30000 mirrors the canonical worker.

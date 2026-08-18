@@ -1,7 +1,7 @@
 # Project Status
 
 **Date:** 2026-08-18
-**Branch:** `bem_redo_continuous` @ `cd3c8b9` (+ uncommitted scalafmt reflow of `RedoJob.scala`; not yet pushed, no PR).
+**Branch:** `bem_redo_continuous` @ `80a69ec` (code, scalafmt-clean) + `248d95b` (docs) — **pushed; PR [#23](https://github.com/brianmacy/sz_spark/pull/23)** (CI running).
 Base `main` is at **v0.3.0** (`1317973`, in-memory feeder chunk processing). Prior release: **v0.2.0** (tag
 `v0.2.0` @ `a6b34f1`, PR #17 — Kafka producer + idempotent DLQ re-drive).
 

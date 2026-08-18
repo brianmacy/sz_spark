@@ -53,7 +53,10 @@ trait EntityMartSink {
  * ⚠ Requires the Delta SQL extensions on the session (`spark.sql.extensions` +
  * `spark.sql.catalog.spark_catalog`) — [[EntityMartSync]] sets them.
  */
-abstract class AbstractDeltaSink(spark: SparkSession) extends EntityMartSink {
+abstract class AbstractDeltaSink(
+    spark: SparkSession,
+    verifyDeparted: DataFrame => DataFrame = identity
+) extends EntityMartSink {
 
   /** The SQL locator for a mart table (path identifier or UC name). */
   protected def locator(table: String): String
@@ -130,10 +133,13 @@ abstract class AbstractDeltaSink(spark: SparkSession) extends EntityMartSink {
    * entity's CURRENT records and never deletes an unmatched target row. For every refreshed entity
    * (those present in `freshRecords`), delete its `entity_record` rows whose
    * `(data_source, record_id)` is absent from the fresh set. A record that MOVED is safe: the
-   * gaining entity's refresh re-keys it, so it IS in the fresh set — only a genuine delete departs.
-   * (⚠ if the gaining entity is not in the SAME batch the row is briefly deleted and re-inserted on
-   * that entity's later refresh — eventual consistency; a Phase-2 hardening would
-   * `getRecord`-verify before deleting, like the reference's periodic sweep.)
+   * gaining entity's refresh re-keys it, so it IS in the fresh set.
+   *
+   * Phase-2 hardening (DONE): departed candidates pass through the `verifyDeparted` seam — the
+   * engine-backed [[DepartedVerify]] keeps only records `getRecord` confirms are genuinely gone, so
+   * a record that moved to an out-of-batch entity is NOT transiently deleted (it survives and is
+   * re-keyed by the gaining entity's refresh). Default is identity: a pure-Delta sink with no
+   * engine keeps the eventual-consistency Phase-1 behavior.
    */
   private def reconcileDepartedRecords(freshRecords: DataFrame): Unit =
     if (nonEmpty(freshRecords)) {
@@ -149,15 +155,20 @@ abstract class AbstractDeltaSink(spark: SparkSession) extends EntityMartSink {
         "left_anti"
       )
       if (nonEmpty(departed)) {
-        val depV = tempView("recondep")
-        departed.createOrReplaceTempView(depV)
-        spark.sql(
-          s"""MERGE INTO ${locator("entity_record")} AS t
-             |USING $depV AS s
-             |ON t.data_source = s.data_source AND t.record_id = s.record_id
-             |WHEN MATCHED THEN DELETE""".stripMargin
-        )
-        spark.catalog.dropTempView(depV)
+        // Phase-2 verify: keep only records the engine confirms are genuinely gone (SzNotFound);
+        // a record that merely MOVED to an out-of-batch entity survives and is re-keyed later.
+        val gone = verifyDeparted(departed.select("data_source", "record_id"))
+        if (nonEmpty(gone)) {
+          val depV = tempView("recondep")
+          gone.createOrReplaceTempView(depV)
+          spark.sql(
+            s"""MERGE INTO ${locator("entity_record")} AS t
+               |USING $depV AS s
+               |ON t.data_source = s.data_source AND t.record_id = s.record_id
+               |WHEN MATCHED THEN DELETE""".stripMargin
+          )
+          spark.catalog.dropTempView(depV)
+        }
       }
       spark.catalog.dropTempView(idsV)
     }
@@ -264,7 +275,11 @@ abstract class AbstractDeltaSink(spark: SparkSession) extends EntityMartSink {
  * `/public_data/entity_mart` ⇒ `` delta.`/public_data/entity_mart/entity` ``). No Databricks
  * account required — Delta 4.x on Spark 4.0.x runs locally.
  */
-final class LocalDeltaSink(spark: SparkSession, basePath: String) extends AbstractDeltaSink(spark) {
+final class LocalDeltaSink(
+    spark: SparkSession,
+    basePath: String,
+    verifyDeparted: DataFrame => DataFrame = identity
+) extends AbstractDeltaSink(spark, verifyDeparted) {
   private val base = basePath.stripSuffix("/")
   protected def locator(table: String): String = s"delta.`$base/$table`"
 }

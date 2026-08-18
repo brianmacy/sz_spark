@@ -23,6 +23,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `redoBatch`). Transient (`NonFatal`) failures are logged and the loop continues; only a fatal error
   exits. `RedoSourceSpec` green.
 
+## [0.4.0] - 2026-08-17
+
+### Added
+- **Single-process dead-letter reprocessor — `jobs.DeadLetterJob`.** Reprocessing the DLQ tends to
+  create more DLQ (a re-driven record can fail again), and `DeadLetterReprocess.selectReprocessable`
+  drops `attempts`, so a naive loop would re-drive genuinely-stuck records forever. The new job wraps
+  `DeadLetterReprocess` in a **bounded, convergent** loop: each round sweeps generation *r*'s DLQ into
+  a re-feed inbox (reprocessable categories only), **re-drives it serially** (`master=local[1]` +
+  `coalesce(1)` — the engine verb runs on one thread, which *cures* the `REPLACE_CONFLICT` concurrency
+  and gives `RETRY_EXHAUSTED` a fresh budget), and routes that round's failures into generation *r+1*.
+  Termination: **drained** (nothing reprocessable / empty residue), **not-shrinking** (a round makes no
+  progress → the residue is genuinely stuck), or **maxRounds** cap (default 3); on a non-drained stop
+  the final generation is moved to a `quarantine=` dir for human review. Re-driven successes append to
+  the `output=` `$AFFECTED` feed so the entity-mart sees them. Reuses `DeadLetterReprocess` + the
+  feeder's `writeSinks`, so DLQ generations are consistent with production. `DeadLetterJobSpec` (drain,
+  shrink-stop→quarantine, maxRounds cap) with an injected re-drive (no engine).
+- **Entity-mart orphan-departure verify — `mart.DepartedVerify` (Phase-2 hardening).**
+  `AbstractDeltaSink.reconcileDepartedRecords` previously deleted an `entity_record` row whenever its
+  record left a surviving entity's fresh set — but a record that MOVED to an entity not in the same
+  batch was briefly deleted then re-inserted (eventual-consistency window). `AbstractDeltaSink` gains an
+  injected `verifyDeparted` seam (default identity, so the sink stays engine-free); `EntityMartSync`
+  wires the engine-backed `DepartedVerify`, which `getRecord`-checks each candidate and keeps only the
+  records confirmed genuinely gone (`SzNotFound`). A moved record survives and is re-keyed by the gaining
+  entity's refresh. New `EntityMartSinkIT` case proves selective verify (verified-gone deleted, moved
+  survives).
+
+### Changed
+- **Entity-mart parse materialized once (Phase-2).** `EntityMartSync.runOnce` now
+  `persist(MEMORY_AND_DISK)` + `count()`s the parsed entities before the change-gate join and the four
+  frame builds, collapsing ~5 redundant Jackson re-parses of the same `getEntity` documents into one
+  (in-memory block-manager materialization, per the v0.3.0 no-host-local-staging idiom).
+
 ## [0.3.0] - 2026-08-16
 
 ### Changed

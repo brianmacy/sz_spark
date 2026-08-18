@@ -191,9 +191,11 @@ object EntityMartRows {
    * parsed and fanned out; GONE rows become tombstones; ERROR rows are ignored here (the sync
    * driver routes them to `_quarantine`).
    *
-   * NOTE: `parsed` is derived lazily, so `parseEntity` re-runs once per output frame. Fine for the
-   * per-micro-batch sizes here; a Phase-2 optimization would materialize `parsed` to a staging
-   * write once (the SparkRecordOps read-back idiom) if the parse cost ever shows up.
+   * NOTE: `parsed` is derived lazily, so `parseEntity` re-runs once per output frame if the caller
+   * hands a lazy dataset. [[EntityMartSync.runOnce]] therefore MATERIALIZES `parsed` once
+   * (`persist(MEMORY_AND_DISK)` + `count()`) before the change-gate join and these frame builds, so
+   * the Jackson parse runs a single time (Phase-2). `explode` below is the lazy convenience form
+   * for callers/tests that do not need that sharing.
    */
   def explode(spark: SparkSession, results: Dataset[GetResult]): MartFrames =
     framesOf(spark, parse(spark, results), results)

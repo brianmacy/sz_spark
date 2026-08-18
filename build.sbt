@@ -1,5 +1,5 @@
 ThisBuild / organization := "com.senzing"
-ThisBuild / version := "0.3.0"
+ThisBuild / version := "0.4.0"
 // Spark 4.0 is built for Scala 2.13. Pin to the exact target Databricks runtime's 2.13.x.
 ThisBuild / scalaVersion := "2.13.16"
 

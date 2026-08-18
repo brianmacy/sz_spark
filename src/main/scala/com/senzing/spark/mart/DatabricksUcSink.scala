@@ -1,6 +1,6 @@
 package com.senzing.spark.mart
 
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{DataFrame, SparkSession}
 
 /**
  * The Databricks / Unity-Catalog target for the entity-mart serving map. It reuses
@@ -19,8 +19,12 @@ import org.apache.spark.sql.SparkSession
  * runs unchanged; only the sink construction and the `mart=` argument shape differ (a
  * `catalog.schema` instead of a filesystem path).
  */
-final class DatabricksUcSink(spark: SparkSession, catalog: String, schema: String)
-    extends AbstractDeltaSink(spark) {
+final class DatabricksUcSink(
+    spark: SparkSession,
+    catalog: String,
+    schema: String,
+    verifyDeparted: DataFrame => DataFrame = identity
+) extends AbstractDeltaSink(spark, verifyDeparted) {
 
   protected def locator(table: String): String = DatabricksUcSink.ucLocator(catalog, schema, table)
 }

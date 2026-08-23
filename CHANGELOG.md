@@ -6,6 +6,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Changed
+- **Feeder invariant: one batch == ONE partition, always — zero per-chunk shuffle.** `OverlappingBatchEngine`
+  no longer derives a partition count from `recordsPerBatch` and never `repartition`s a chunk; it `coalesce(1)`s
+  (a narrow, no-shuffle dependency), so a batch is always a single serial task and batch SIZE is the only variant.
+  A >1-partition batch was a per-chunk shuffle whose map outputs were lost under memory pressure — a
+  `MetadataFetchFailedException` retry storm, self-induced on the fleet when a 50k-record batch forced a 10-way
+  repartition on 2 GB executor heaps and collapsed feeder throughput. `SparkRecordOps` also replaces the
+  materializing `count()` (an aggregate Exchange = a second per-chunk shuffle) with a shuffle-free partition
+  **drain**, preserving the exactly-once engine pass. 148/148 unit specs green.
 - **Redoer is continuous — one long-lived Spark session drains until SIGTERM, no per-batch teardown.**
   `RedoJob` previously ran once (drain the currently-pending queue, write, exit) and relied on an
   external scheduler to relaunch it every ~10 min; each relaunch burned ~30-60 s of Spark

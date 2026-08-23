@@ -27,16 +27,19 @@ import com.senzing.spark.work.InputRecord
  * large enough that per-batch overhead is negligible vs the engine time (at ~4 rec/s/thread a 1k
  * batch runs ~250s, so the ~1s of plumbing is ~0.4%).
  *
- * (Larger `recordsPerBatch` ⇒ >1 partition/batch; the engine then repartitions and a freed slot
- * pulls the next pending PARTITION from any in-flight chunk — still overlap, but a multi-partition
- * batch reintroduces a per-batch barrier, so prefer the 1-partition point above.)
+ * INVARIANT: one batch == ONE partition, ALWAYS (`coalesce(1)`, a narrow no-shuffle dependency),
+ * regardless of `recordsPerBatch`. Batch SIZE is the only variant. The engine NEVER splits a batch
+ * across partitions: a repartition is a per-chunk shuffle whose map outputs can be lost under memory
+ * pressure (a MetadataFetchFailed retry storm — observed when a 50k-record batch forced a 10-way
+ * repartition on tiny executor heaps, self-inducing the exact failure this engine exists to avoid).
+ * A larger batch is simply a longer single serial task.)
  *
  * It touches ONLY the [[RecordSource]] seam, so the source can be anything (inbox / Kafka / Delta);
  * the driver does metadata (claim/commit/reclaim) + job submission, and ALL record data rides Spark
  * partitions to the executors.
  *
- * Per chunk: read → (repartition only when P>1) → ONE `process` pass (`AddCore.run`) → sinks once →
- * `commit`. At the 1-partition operating point there is no shuffle and the chunk is a single task.
+ * Per chunk: read → coalesce to 1 partition (narrow, no shuffle) → ONE `process` pass
+ * (`AddCore.run`) → sinks once → `commit`. The chunk is always a single task; never a shuffle.
  *
  * At-least-once, never-drop: a chunk whose processing THROWS is NOT committed, so the source
  * reclaims it on the next restart (dispose flavor) or it is re-read from the last committed cursor
@@ -61,12 +64,6 @@ import com.senzing.spark.work.InputRecord
 object OverlappingBatchEngine {
 
   private val IdlePauseMs = 200L
-
-  /**
-   * The system's own partition sizing: ~this many records per partition (the user sets
-   * `recordsPerBatch`, not a partition count — the engine derives the width).
-   */
-  private val TargetRecordsPerPartition = 5000
 
   // scalastyle:off println
   private def log(msg: String): Unit = println(s"[OverlappingBatchEngine] $msg")
@@ -96,11 +93,11 @@ object OverlappingBatchEngine {
       s"maxUnprocessedBatches must be > 0, was $maxUnprocessedBatches"
     )
 
-    // The user sets records-per-batch + how many batches may be in flight; the engine derives the
-    // partition width (the system "partitions each batch any way it wants"). K batches × P partitions
-    // is the pending-partition pool a freed slot steals from.
+    // The user sets records-per-batch + how many batches may be in flight. INVARIANT: one batch ==
+    // ONE partition (a single serial task), so batch SIZE is the only variant — the engine never
+    // splits a batch across partitions (a repartition is a per-chunk shuffle that can storm under
+    // memory pressure). K in-flight batches == K pending single-partition tasks a freed slot steals.
     val concurrency = maxUnprocessedBatches
-    val partitionsPerChunk = math.max(1, recordsPerBatch / TargetRecordsPerPartition)
 
     source.reclaim()
 
@@ -138,9 +135,10 @@ object OverlappingBatchEngine {
     def processOne(chunk: Chunk): Unit = {
       inFlight.incrementAndGet()
       try {
-        // 1 partition (the default operating point) ⇒ NO repartition/shuffle: the batch is a single
-        // task that commits on its own, so a straggler holds exactly one slot and blocks nothing.
-        val df = if (partitionsPerChunk > 1) chunk.df.repartition(partitionsPerChunk) else chunk.df
+        // INVARIANT: one batch == ONE partition. `coalesce(1)` enforces it with a NARROW dependency
+        // (no shuffle), so the batch is a single task that commits on its own — a straggler holds
+        // exactly one slot and blocks nothing, and there is no shuffle map output to lose.
+        val df = chunk.df.coalesce(1)
         // `process` runs the engine once and MATERIALIZES the result in Spark's distributed cache
         // (no host-local staging file — works with executors on any host). Free the cache once the
         // sinks + commit have read good/errors, whether they succeed or throw.
@@ -229,7 +227,7 @@ object OverlappingBatchEngine {
 
     log(
       s"starting: recordsPerBatch=$recordsPerBatch maxUnprocessedBatches=$maxUnprocessedBatches " +
-        s"(=> $partitionsPerChunk partitions/batch, ${maxUnprocessedBatches * partitionsPerChunk} pending) trigger=$trigger" +
+        s"(=> 1 partition/batch [invariant], $maxUnprocessedBatches pending) trigger=$trigger" +
         s" clusterFailureThreshold=$clusterFailureThreshold progressTimeoutMs=$progressTimeoutMs"
     )
     val watchdog = startWatchdog()

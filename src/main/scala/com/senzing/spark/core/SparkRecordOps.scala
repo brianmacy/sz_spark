@@ -21,8 +21,8 @@ final case class SplitResult(good: DataFrame, errors: DataFrame, unpersist: () =
  * [[com.senzing.spark.model.StagingRow]] stream, MATERIALIZE it once, then split into output/error
  * from the materialized result — zero lineage re-execution, one engine pass per attempt.
  *
- * MATERIALIZATION = Spark's distributed cache (`persist(MEMORY_AND_DISK)` + a `count()` to force
- * the single pass), NOT a host-local staging file. This is deliberate: on a multi-host Spark
+ * MATERIALIZATION = Spark's distributed cache (`persist(MEMORY_AND_DISK)` + a shuffle-free
+ * partition DRAIN to force the single pass), NOT a host-local staging file. This is deliberate: on a multi-host Spark
  * cluster the driver + executors span both hosts, so a host-local parquet staging file written by
  * an executor on one host is invisible to an executor on the other (`FileNotFoundException`), and a
  * shared NFS path fails because the container uid is squashed (`Mkdirs failed`). The block manager
@@ -32,7 +32,7 @@ final case class SplitResult(good: DataFrame, errors: DataFrame, unpersist: () =
  *
  * Engine lifetime is bracketed per partition: `acquire` at partition start, `release` on task
  * completion (via `TaskContext`, so it fires after the lazy iterator is fully consumed and on
- * failure) — never a premature `finally`. Because the engine pass runs exactly once (at `count()`)
+ * failure) — never a premature `finally`. Because the engine pass runs exactly once (at the drain)
  * and the two filters read the cache, the bracket also runs exactly once per partition.
  */
 object SparkRecordOps {
@@ -57,8 +57,13 @@ object SparkRecordOps {
       .persist(StorageLevel.MEMORY_AND_DISK)
 
     // Force the SINGLE engine pass now, so the good/errors filters read the cache and never
-    // re-execute the mapPartitions (which would double-run the Senzing verb).
-    staged.count()
+    // re-execute the mapPartitions (which would double-run the Senzing verb). We DRAIN every
+    // partition rather than call `count()`: `count()` compiles to an aggregate Exchange (a per-chunk
+    // shuffle whose tiny map output can still be lost under memory pressure -> MetadataFetchFailed),
+    // whereas draining forces the identical single pass with NO shuffle. The drain MUST consume the
+    // iterator — `it.flatMap(worker.processOne)` is lazy, so an un-consumed iterator would skip the
+    // engine entirely and stage nothing.
+    staged.foreachPartition((rows: Iterator[StagingRow]) => while (rows.hasNext) { rows.next(); () })
 
     SplitResult(
       good = staged.filter(col("kind") =!= StagingKind.Error).toDF(),

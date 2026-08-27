@@ -22,13 +22,13 @@ final case class SplitResult(good: DataFrame, errors: DataFrame, unpersist: () =
  * from the materialized result — zero lineage re-execution, one engine pass per attempt.
  *
  * MATERIALIZATION = Spark's distributed cache (`persist(MEMORY_AND_DISK)` + a shuffle-free
- * partition DRAIN to force the single pass), NOT a host-local staging file. This is deliberate: on a multi-host Spark
- * cluster the driver + executors span both hosts, so a host-local parquet staging file written by
- * an executor on one host is invisible to an executor on the other (`FileNotFoundException`), and a
- * shared NFS path fails because the container uid is squashed (`Mkdirs failed`). The block manager
- * materializes the result in memory (spilling to Spark-managed local disk, refetched cross-host via
- * the block-manager RPC) with no filesystem path at all, so it works regardless of which executors
- * land the write and the read.
+ * partition DRAIN to force the single pass), NOT a host-local staging file. This is deliberate: on
+ * a multi-host Spark cluster the driver + executors span both hosts, so a host-local parquet
+ * staging file written by an executor on one host is invisible to an executor on the other
+ * (`FileNotFoundException`), and a shared NFS path fails because the container uid is squashed
+ * (`Mkdirs failed`). The block manager materializes the result in memory (spilling to Spark-managed
+ * local disk, refetched cross-host via the block-manager RPC) with no filesystem path at all, so it
+ * works regardless of which executors land the write and the read.
  *
  * Engine lifetime is bracketed per partition: `acquire` at partition start, `release` on task
  * completion (via `TaskContext`, so it fires after the lazy iterator is fully consumed and on
@@ -63,7 +63,9 @@ object SparkRecordOps {
     // whereas draining forces the identical single pass with NO shuffle. The drain MUST consume the
     // iterator — `it.flatMap(worker.processOne)` is lazy, so an un-consumed iterator would skip the
     // engine entirely and stage nothing.
-    staged.foreachPartition((rows: Iterator[StagingRow]) => while (rows.hasNext) { rows.next(); () })
+    staged.foreachPartition((rows: Iterator[StagingRow]) =>
+      while (rows.hasNext) { rows.next(); () }
+    )
 
     SplitResult(
       good = staged.filter(col("kind") =!= StagingKind.Error).toDF(),

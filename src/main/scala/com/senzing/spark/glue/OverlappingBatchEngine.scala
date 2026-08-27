@@ -29,10 +29,10 @@ import com.senzing.spark.work.InputRecord
  *
  * INVARIANT: one batch == ONE partition, ALWAYS (`coalesce(1)`, a narrow no-shuffle dependency),
  * regardless of `recordsPerBatch`. Batch SIZE is the only variant. The engine NEVER splits a batch
- * across partitions: a repartition is a per-chunk shuffle whose map outputs can be lost under memory
- * pressure (a MetadataFetchFailed retry storm — observed when a 50k-record batch forced a 10-way
- * repartition on tiny executor heaps, self-inducing the exact failure this engine exists to avoid).
- * A larger batch is simply a longer single serial task.)
+ * across partitions: a repartition is a per-chunk shuffle whose map outputs can be lost under
+ * memory pressure (a MetadataFetchFailed retry storm — observed when a 50k-record batch forced a
+ * 10-way repartition on tiny executor heaps, self-inducing the exact failure this engine exists to
+ * avoid). A larger batch is simply a longer single serial task.)
  *
  * It touches ONLY the [[RecordSource]] seam, so the source can be anything (inbox / Kafka / Delta);
  * the driver does metadata (claim/commit/reclaim) + job submission, and ALL record data rides Spark

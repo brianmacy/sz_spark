@@ -34,7 +34,7 @@ jobs:
           java-version: "21"
 
       # sbt is not pre-installed on ubuntu-latest; the official action provides it.
-      - uses: sbt/setup-sbt@bfea3c5f48abd221b04a6df4798aa5eb8b6a2baf # v1.5.6
+      - uses: sbt/setup-sbt@82da71df4e122282484a99a8d70096bc2369dbd8 # v1.5.9
 
       - name: Cache sbt / ivy / coursier
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

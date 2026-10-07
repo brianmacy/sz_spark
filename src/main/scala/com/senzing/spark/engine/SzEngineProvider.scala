@@ -71,6 +71,12 @@ object SzEngineProvider {
     if (!sys.env.get("SENZING_KEEP_EXTRACTED").contains("true"))
       extractRoot.foreach(NativeBootstrap.deleteRecursively)
 
+  /**
+   * The extracted native lib dir when running from the FAT jar and the engine has been built, else
+   * None.
+   */
+  def nativeLibDir: Option[File] = extractRoot.map(r => NativePaths.under(r).libDir)
+
   /** Acquire the shared environment (builds once); pair with [[release]] in a finally. */
   def acquire(): SzEnvironment = lifecycle.acquire()
   def release(): Unit = lifecycle.release()

@@ -192,7 +192,7 @@ mcp = FastMCP(
         "native-library self-extraction, redo processing, one-time initialization, testing, "
         "the parallel-batch feeder and its source adapters (the on-prem parquet-inbox dispose flavor, "
         "the Kafka and Delta watermark sources, and the RabbitMQ->Kafka bridge), "
-        "the entity-mart replication (real-time Delta/Databricks export of the resolved entity "
+        "the record-transform plugin hook (load-time record rewrite via a C-ABI plugin and JNI shim), the entity-mart replication (real-time Delta/Databricks export of the resolved entity "
         "graph off the AFFECTED_ENTITIES change feed: EntityMartSchema/GetCore/EntityMartRows/"
         "EntityMartSink), deployment, or troubleshooting. This is NOT optional — critical design rules and "
         "operational knowledge are documented here that CANNOT be discovered by reading code alone "

@@ -26,6 +26,8 @@ object ErrorTaxonomy {
   import ErrorCategory._
 
   def classify(t: Throwable): ErrorCategory = t match {
+    case _: com.senzing.spark.transform.RecordTransformException =>
+      BadInput // the plugin rejected this record
     case _: SzUnknownDataSourceException => ConfigRelevant // matched before SzBadInputException
     case _: SzNotFoundException => NotFound // matched before SzBadInputException
     case _: SzConfigurationException => ConfigRelevant

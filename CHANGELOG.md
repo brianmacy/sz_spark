@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- **Record-transform plugin hook for loads.** `SENZING_RECORD_TRANSFORM_PLUGIN` / `SENZING_RECORD_TRANSFORM_CONFIG` on the executors
+  load the same C-ABI plugin as `sz_queue_combined_consumer` (for example `libsz_semkey_transform.so`) and rewrite every add/update
+  record before `addRecord`; unset = no hook. A rejected record dead-letters as `BAD_INPUT`; a plugin that cannot load fails the task.
+  Delete, search and redo are never transformed. Implemented with a small JNI shim (`native/szrt/szrt_jni.c`, built by `stageNatives`
+  into the FAT jar; no third-party FFI library, Java 17 compatible). `RecordTransformIT` runs real plugins (no mocks), including an
+  end-to-end `AddCore` run on the SQLite engine. See `docs/RECORD_TRANSFORM.md`.
+
 ### Changed
 - **Feeder invariant: one batch == ONE partition, always — zero per-chunk shuffle.** `OverlappingBatchEngine`
   no longer derives a partition count from `recordsPerBatch` and never `repartition`s a chunk; it `coalesce(1)`s

@@ -3,6 +3,7 @@ package com.senzing.spark.core
 import org.apache.spark.sql.{Dataset, SparkSession}
 
 import com.senzing.spark.engine.SzEngineProvider
+import com.senzing.spark.transform.RecordTransformProvider
 import com.senzing.spark.work.{InputRecord, WorkerOp}
 
 /**
@@ -19,7 +20,7 @@ object AddCore {
     SparkRecordOps.run(
       spark,
       input,
-      EngineWorker.factory(WorkerOp.Add, runId, Verbs.add),
+      EngineWorker.factory(WorkerOp.Add, runId, e => Verbs.add(e, RecordTransformProvider.get())),
       acquire = () => (),
       release = () => SzEngineProvider.release()
     )

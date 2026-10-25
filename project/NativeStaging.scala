@@ -15,6 +15,26 @@ object NativeStaging {
   // NEEDED non-system siblings a slim image may lack; patchelf'd to $ORIGIN if they ship without one.
   private val BundledSiblings = Seq("libgcc_s.so.1", "libssl.so.3", "libcrypto.so.3")
 
+  final val ShimName = "libszrt_jni.so"
+
+  /**
+   * Compiles native/szrt/szrt_jni.c (the JNI bridge to record-transform plugins) with gcc against the running JDK's headers.
+   * Fails the build loudly when gcc or jni.h is missing: a jar without the shim could not load a configured plugin.
+   */
+  def buildShim(projectBase: File, out: File, log: String => Unit): File = {
+    val src = projectBase / "native" / "szrt" / "szrt_jni.c"
+    val jdk = new File(System.getProperty("java.home"))
+    val inc = jdk / "include"
+    require(src.exists, s"JNI shim source not found: $src")
+    require((inc / "jni.h").exists, s"jni.h not found under $inc: build with a JDK (java.home=$jdk), not a JRE")
+    IO.createDirectory(out.getParentFile)
+    val cmd = Seq("gcc", "-shared", "-fPIC", "-O2", "-Wall", "-Wextra", "-Werror", s"-I$inc", s"-I${inc / "linux"}", src.getAbsolutePath, "-ldl", "-o", out.getAbsolutePath)
+    val rc = cmd.!
+    require(rc == 0, s"gcc failed (exit $rc) building the record-transform JNI shim: ${cmd.mkString(" ")}")
+    log(s"built $out")
+    out
+  }
+
   def stage(senzingDir: File, arch: String, projectBase: File, log: String => Unit): Unit = {
     require(senzingDir.exists, s"SENZING_DIR not found: $senzingDir (need a local licensed install)")
     val target = projectBase / "src" / "main" / "resources" / "native" / s"linux-$arch"
@@ -64,6 +84,9 @@ object NativeStaging {
       }
       log("patchelf: set RPATH=$ORIGIN on bundled siblings (libSz.so left untouched)")
     } else log("patchelf not found — skipping RPATH patch (bundled siblings may not resolve at runtime)")
+
+    // (5) The record-transform JNI shim (own code, no Senzing dependency): loaded by PluginTransform from the extraction dir.
+    buildShim(projectBase, lib / ShimName, log)
 
     val soCount = Option(lib.listFiles()).getOrElse(Array.empty).count(_.getName.endsWith(".so"))
     log(s"Staged native payload to $target ($soCount .so libs)")

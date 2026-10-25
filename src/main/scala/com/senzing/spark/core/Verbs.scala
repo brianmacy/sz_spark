@@ -2,6 +2,7 @@ package com.senzing.spark.core
 
 import com.senzing.sdk.{SzEngine, SzFlag, SzRecordKey}
 
+import com.senzing.spark.transform.RecordTransform
 import com.senzing.spark.work.InputRecord
 
 /**
@@ -14,8 +15,18 @@ import com.senzing.spark.work.InputRecord
 object Verbs {
   private val WithInfo: java.util.Set[SzFlag] = SzFlag.SZ_WITH_INFO_FLAGS
 
-  def add(e: SzEngine): InputRecord => String =
-    r => e.addRecord(SzRecordKey.of(r.dataSource, r.recordId), r.payload, WithInfo)
+  /**
+   * Add/update. With a record-transform plugin the payload is rewritten just before `addRecord`;
+   * the key stays the ORIGINAL record's (DATA_SOURCE / RECORD_ID), so the plugin only ever adds or
+   * rewrites features. Redo, delete and search are never transformed.
+   */
+  def add(e: SzEngine, transform: Option[RecordTransform] = None): InputRecord => String =
+    r =>
+      e.addRecord(
+        SzRecordKey.of(r.dataSource, r.recordId),
+        transform.flatMap(_(r.payload)).getOrElse(r.payload),
+        WithInfo
+      )
 
   def delete(e: SzEngine): InputRecord => String =
     r => e.deleteRecord(SzRecordKey.of(r.dataSource, r.recordId), WithInfo)

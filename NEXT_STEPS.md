@@ -1,5 +1,16 @@
 # Next Steps
 
+## NOW: land the record-transform plugin hook (branch `record-transform-plugin`)
+
+1. Open the PR, watch CI (`scalafmtCheckAll` + `sbt test`; the build now needs gcc + a JDK with `jni.h` for the shim), merge when green.
+2. Run the FAT-jar path once: `sbt stageNatives assembly`, then a `spark-submit --master local[2]` `AddUpdateJob` with
+   `spark.executorEnv.SENZING_RECORD_TRANSFORM_PLUGIN` set to the example plugin (proves `SzEngineProvider.nativeLibDir` +
+   extraction load the shim without `-Dsz.rt.jni.lib`).
+3. Run a real load of the semkey plugin on a Postgres repository (needs the semkey-configured repository and the plugin's models on
+   each executor node); compare entity counts against a `sz_rabbit_combined_consumer` load of the same records.
+4. Decide whether search requests should also pass through the plugin (the tRPC search path transforms attributes; `Verbs.search` does
+   not today, by design: the request was load-only).
+
 **Branch:** `bem_redo_continuous` @ `80a69ec` (code) + `248d95b` (docs) — **pushed; PR [#23](https://github.com/brianmacy/sz_spark/pull/23)** (CI running). Base `main` @ v0.3.0.
 Unit suite green (145/145); deployed live to the `.141` redo container (`v0.3.0-redocont-20260818T13`).
 

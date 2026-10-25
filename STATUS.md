@@ -1,5 +1,18 @@
 # Project Status
 
+## ★ Current session (2026-10-07) — record-transform plugin hook (`record-transform-plugin`)
+
+`SENZING_RECORD_TRANSFORM_PLUGIN` / `SENZING_RECORD_TRANSFORM_CONFIG` on the executors load the same C-ABI plugin as
+`sz_queue_combined_consumer` (`libsz_semkey_transform.so`) and rewrite add/update records before `addRecord` (unset = no hook).
+JNI shim `native/szrt/szrt_jni.c` (owner's choice over JNA/jnr-ffi: LGPL; FFM needs Java 22, DBR 17.3 is Java 17), built by
+`stageNatives` into the FAT jar. Verified: default `sbt test` 148/148, `scalafmtCheckAll` clean, `RecordTransformIT` 8 tests, all passing across two environment setups (engine test: SQLite env + provider env; semkey test: its plugin env) (real example
+plugin, concurrency, error dead-letter, the production semkey plugin through the shim, and an end-to-end SQLite-engine `AddCore` run).
+NOT verified: the FAT-jar extraction path at runtime (the staged jar contains `libszrt_jni.so`; extraction loads it by the same
+mechanism as `libSz.so`), a Spark cluster run, and a Postgres repository with the semkey config. Plan:
+`~/.claude/plans/sz-spark-record-transform-hook.md`. Docs: `docs/RECORD_TRANSFORM.md`.
+
+(Older sections below predate this session; the redo/feeder PRs they mention (#23, #24) are merged.)
+
 **Date:** 2026-08-18
 **Branch:** `bem_redo_continuous` @ `80a69ec` (code, scalafmt-clean) + `248d95b` (docs) — **pushed; PR [#23](https://github.com/brianmacy/sz_spark/pull/23)** (CI running).
 Base `main` is at **v0.3.0** (`1317973`, in-memory feeder chunk processing). Prior release: **v0.2.0** (tag

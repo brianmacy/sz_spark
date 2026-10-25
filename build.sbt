@@ -38,12 +38,18 @@ val sparkJavaOpens: Seq[String] = Seq(
 
 val nativeArch    = sys.env.getOrElse("SENZING_ARCH", "x86_64")
 lazy val stageNatives = taskKey[Unit]("Stage Senzing native libs/data/resources/config into jar resources (local, gitignored)")
+lazy val buildSzRtJni = taskKey[File]("Compile the record-transform JNI shim (native/szrt/szrt_jni.c) for local runs and tests")
 lazy val verifyAssembly = taskKey[Unit]("Verify the assembled FAT jar contains the native payload")
 
 lazy val root = (project in file("."))
   .settings(
     name := "sz-spark",
     stageNatives := NativeStaging.stage(senzingDir, nativeArch, baseDirectory.value, sLog.value.info(_)),
+    buildSzRtJni := NativeStaging.buildShim(
+      baseDirectory.value,
+      baseDirectory.value / "target" / "szrt" / NativeStaging.ShimName,
+      sLog.value.info(_)
+    ),
     verifyAssembly := NativeStaging.verifyJar(
       baseDirectory.value / "target" / s"scala-2.13" / (assembly / assemblyJarName).value,
       nativeArch,
@@ -84,6 +90,8 @@ lazy val root = (project in file("."))
     Test / fork := true,
     Test / parallelExecution := false, // local SparkSessions must not run concurrently in one JVM
     Test / javaOptions ++= sparkJavaOpens,
+    // The record-transform JNI shim for PluginTransformSpec (a FAT jar extracts it; tests run from classes).
+    Test / javaOptions += s"-Dsz.rt.jni.lib=${buildSzRtJni.value.getAbsolutePath}",
     // Exclude integration specs (tagged) from the default `test`; run them with `-n` + SZ_IT=1.
     Test / testOptions += Tests.Argument("-l", "com.senzing.spark.IntegrationTest"),
     // FAT jar (full native staging wired in via project/StageNatives.scala at M9).

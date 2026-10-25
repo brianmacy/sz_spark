@@ -269,6 +269,7 @@ Reference docs:
 - Performance & sizing (scaling to billions of records): [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)
 - Streaming ingest design (queue → inbox → feeder): [`docs/RABBITMQ_INGEST.md`](docs/RABBITMQ_INGEST.md)
 - Dead-letter capture & reprocess: [`docs/DEAD_LETTER.md`](docs/DEAD_LETTER.md)
+- Record-transform plugin (rewrite records at load, e.g. the semantic-key plugin): [`docs/RECORD_TRANSFORM.md`](docs/RECORD_TRANSFORM.md)
 - Core vs glue vs diag job layering: [`docs/JOB_LAYERING.md`](docs/JOB_LAYERING.md)
 - Troubleshooting (Spark-specific failure modes): [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
 - Ops runbook: [`docs/RUNBOOK.md`](docs/RUNBOOK.md)

@@ -14,6 +14,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   end-to-end `AddCore` run on the SQLite engine. See `docs/RECORD_TRANSFORM.md`.
 
 ### Changed
+- **CI: `actions/setup-java` 5.7.0 -> 6.0.1 and `sbt/setup-sbt` 1.5.6 -> 1.5.11** (Dependabot #32, #35).
 - **Feeder invariant: one batch == ONE partition, always — zero per-chunk shuffle.** `OverlappingBatchEngine`
   no longer derives a partition count from `recordsPerBatch` and never `repartition`s a chunk; it `coalesce(1)`s
   (a narrow, no-shuffle dependency), so a batch is always a single serial task and batch SIZE is the only variant.

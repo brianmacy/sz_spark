@@ -1,5 +1,16 @@
 # Project Status
 
+## ★ Current session (2026-10-31) — native loading without `LD_LIBRARY_PATH` + optional explicit engine config
+
+Branch `brian/findlibrary-loader`. (1) The SDK implementation (`com.senzing.sdk.core`) + `SzCoreEnvironmentFactory` are defined by
+one `NativeAwareClassLoader` per JVM whose `findLibrary` answers from the extracted `lib/`, so the SDK's own `System.loadLibrary("Sz")`
+binds libSz.so with no launch-time `LD_LIBRARY_PATH` (still supported). Seam: `engine.SzEnvironmentFactory`. (2) Optional
+`engineConfig: Option[String]` on the engine-facing cores, carried in the task closure, wins over the env var (`EngineConfigPin`).
+Verified in an arm64 Ubuntu 24.04 container (JDK 17, Senzing 4.4.3): `scalafmtCheckAll test` 165/165; `ExplicitConfigIT` 1/1 and
+`NativeLoaderIT` 3/3 (`LD_LIBRARY_PATH` unset); FAT jar `SelfCheck` OK both without and with `LD_LIBRARY_PATH`. NOT verified
+without `LD_LIBRARY_PATH`: PostgreSQL/MSSQL/MySQL plugins, a Spark cluster. Pre-existing: `EngineIT`'s redo test hangs (it calls the
+continuous `RedoJob.main`); it-local.sh now runs it last.
+
 ## ★ Current session (2026-10-07) — record-transform plugin hook (`record-transform-plugin`)
 
 `SENZING_RECORD_TRANSFORM_PLUGIN` / `SENZING_RECORD_TRANSFORM_CONFIG` on the executors load the same C-ABI plugin as

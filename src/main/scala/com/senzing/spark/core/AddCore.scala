@@ -15,12 +15,18 @@ object AddCore {
   def run(
       spark: SparkSession,
       input: Dataset[InputRecord],
-      runId: String
+      runId: String,
+      engineConfig: Option[String] = None
   ): SplitResult =
     SparkRecordOps.run(
       spark,
       input,
-      EngineWorker.factory(WorkerOp.Add, runId, e => Verbs.add(e, RecordTransformProvider.get())),
+      EngineWorker.factory(
+        WorkerOp.Add,
+        runId,
+        e => Verbs.add(e, RecordTransformProvider.get()),
+        engineConfig
+      ),
       acquire = () => (),
       release = () => SzEngineProvider.release()
     )

@@ -23,12 +23,18 @@ and `docs/TROUBLESHOOTING.md` for failure modes.
 ## Required Spark conf (cluster / job)
 
 ```
-spark.executorEnv.LD_LIBRARY_PATH = <SENZING_EXTRACT_DIR>/<sha>/lib   # MANDATORY (dlopen-by-soname)
+spark.executorEnv.LD_LIBRARY_PATH = <SENZING_EXTRACT_DIR>/<sha>/lib   # optional for the engine jobs (see below)
 spark.speculation                 = false                            # engine calls are side effects
 spark.executor.cores              = N                                # = concurrent Sz threads/executor
 spark.executor.memory             = 2g                               # JVM heap (modest; records stream)
 spark.executor.memoryOverhead     = (4 + N) g                        # native/off-heap: 4GB engine + 1GB/thread
 ```
+
+`LD_LIBRARY_PATH` is no longer required on executors: the engine preloads the helpers `libSz.so`
+dlopens and defines the SDK through a class loader whose `findLibrary` answers from the extract `lib/`,
+so the SDK's own `System.loadLibrary("Sz")` finds `libSz.so` there. Setting it still works as before;
+keep it when you stage the DB client closure into `lib/` (air-gapped variant), and for `InitJob`, which
+loads the SDK directly.
 
 **Memory is native/off-heap** — Senzing is C, so its RAM counts against `memoryOverhead`, not heap. Rule
 of thumb: **4 GB per executor + 1 GB per core** (concurrent Sz thread). Under-sizing `memoryOverhead`
@@ -86,7 +92,8 @@ the node image before the JVM starts:
   + chain; MSSQL ODBC driver; MySQL `libmysqlclient`). Alternatively use the air-gapped FAT-jar variant
   that stages the client into `lib/`.
 - Optionally pre-create / pin `SENZING_EXTRACT_DIR` on a non-tmpfs path with ≥ ~1 GB free, so the
-  per-node self-extraction has a stable, known location for the `LD_LIBRARY_PATH` value.
+  per-node self-extraction has a stable, known location (and, if you set it, a known
+  `LD_LIBRARY_PATH` value).
 
 Confirm the worker image's **glibc ≥ 2.34** (the verified floor; `GlibcCheck` enforces it at startup).
 
@@ -134,7 +141,7 @@ Databricks already has the Delta SQL extensions on the session, so no `--package
 [tutorial Guide 07](tutorial/07-entity-mart-replication.md) for the full model.
 
 - **This is a read job on the engine, not a loader** — it calls `getEntity` per affected entity, so it
-  needs the same engine env (`LD_LIBRARY_PATH`, `SENZING_ENGINE_CONFIGURATION_JSON`) as the loaders, but
+  needs the same engine env (`SENZING_ENGINE_CONFIGURATION_JSON`, plus `LD_LIBRARY_PATH` if you set it) as the loaders, but
   far less throughput headroom. One env per JVM still applies.
 - **`mart=` is a `catalog.schema`** the job creates its six tables under (four mart + `_sync_state` +
   `_quarantine`). The runner needs `CREATE TABLE` on that schema.

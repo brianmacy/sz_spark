@@ -15,6 +15,19 @@ final class EngineSettingsSpec extends AnyFunSuite {
     )
   }
 
+  test("resolve: an explicit value wins over the environment") {
+    val env = Map(EngineSettings.EnvVar -> """{"SQL":{"CONNECTION":"env"}}""")
+    assert(EngineSettings.resolve(Some(""" {"SQL":{}} """), env) == """{"SQL":{}}""")
+    assert(EngineSettings.resolve(Some("""{"SQL":{}}"""), Map.empty) == """{"SQL":{}}""")
+  }
+
+  test("resolve: no (or a blank) explicit value falls back to the environment") {
+    val env = Map(EngineSettings.EnvVar -> """{"SQL":{"CONNECTION":"env"}}""")
+    assert(EngineSettings.resolve(None, env) == env(EngineSettings.EnvVar))
+    assert(EngineSettings.resolve(Some("  "), env) == env(EngineSettings.EnvVar))
+    assertThrows[IllegalStateException](EngineSettings.resolve(None, Map.empty))
+  }
+
   test("fromEnv fails loudly when unset or blank") {
     assertThrows[IllegalStateException](EngineSettings.fromEnv(Map.empty))
     assertThrows[IllegalStateException](EngineSettings.fromEnv(Map(EngineSettings.EnvVar -> "  ")))

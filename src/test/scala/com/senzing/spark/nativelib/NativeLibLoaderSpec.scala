@@ -23,6 +23,13 @@ final class NativeLibLoaderSpec extends AnyFunSuite {
     assert(order(order.length - 2) == "libpostgresqlplugin.so")
   }
 
+  test("helperOrder is loadOrder without libSz (the SDK binds libSz through its own loader)") {
+    assert(
+      NativeLibLoader.helperOrder(Some("libsqliteplugin.so")) ==
+        Seq("libgcc_s.so.1", "libszzstd.so", "libszvec.so", "libsqliteplugin.so")
+    )
+  }
+
   test("loadAll loads only existing libs, in order, via the injected loader") {
     val dir = Files.createTempDirectory("nll").toFile
     // Only some siblings exist (libgcc_s is provided by the base image → absent here).

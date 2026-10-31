@@ -43,7 +43,7 @@ data jobs and on the driver for `InitJob`):
 ```
 SENZING_EXTRACT_DIR=/local_disk0/sz                      # local SSD; needs an SSD instance type. If the
                                                          # cluster has no /local_disk0, use /var/tmp (must be a real disk, not tmpfs).
-LD_LIBRARY_PATH=/local_disk0/sz/sz-spark-JAR_SHA/lib      # MANDATORY — dlopen-by-soname; replace JAR_SHA
+LD_LIBRARY_PATH=/local_disk0/sz/sz-spark-JAR_SHA/lib      # for InitJob on the driver; optional for executors
 PGSSLMODE=require
 SENZING_ENGINE_CONFIGURATION_JSON={{secrets/sz/ecj}}
 ```
@@ -107,8 +107,9 @@ Read paths can be UC Volumes / cloud storage (`s3://`, `abfss://`, `/Volumes/…
 
 ## Gotchas
 
-- **`LD_LIBRARY_PATH` must be set as a cluster env var** (driver+workers) to the `sz-spark-<JAR_SHA>/lib`
-  extract dir — `$ORIGIN` does not cover dlopen-by-soname. If it can't be set, the deploy fails.
+- **`LD_LIBRARY_PATH`** (to the `sz-spark-<JAR_SHA>/lib` extract dir) is no longer needed by the engine
+  jobs — the engine finds `libSz.so` through its native-aware class loader. `InitJob` (which loads the
+  SDK directly) and an air-gapped variant with the DB client staged into `lib/` still need it.
 - Pin **Scala 2.13.x** to the DBR's Spark 4.0 build exactly (mismatch under `provided` = runtime
   `NoSuchMethodError`).
 - Size **`memoryOverhead`**, not heap, for the native engine (4 GB + 1 GB/core).

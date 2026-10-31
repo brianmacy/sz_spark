@@ -20,8 +20,16 @@ only — never production/concurrent). The script:
 2. sets `LD_LIBRARY_PATH=$SENZING_DIR/er/lib` and a SQLite `SENZING_ENGINE_CONFIGURATION_JSON`,
 3. runs `InitJob dialect=sqlite dataSources=TEST` (stock config has **no** app data sources — an
    unregistered source makes `addRecord` throw `SzUnknownDataSourceException`),
-4. runs `EngineIT` with `SZ_IT=1` and `-Dspark.master=local[2]`, overriding the default
-   `IntegrationTest` tag exclusion.
+4. runs `ExplicitConfigIT` with `SENZING_ENGINE_CONFIGURATION_JSON` UNSET (the config is passed
+   explicitly to `AddCore.run` and travels in the task closure),
+5. runs `NativeLoaderIT` with `LD_LIBRARY_PATH` UNSET (the SDK finds `libSz.so` through the
+   native-aware class loader; it also asserts that without the loader `System.loadLibrary("Sz")` fails).
+6. runs `EngineIT` with `SZ_IT=1` and `-Dspark.master=local[2]`, overriding the default
+   `IntegrationTest` tag exclusion (last — see the known issue below).
+
+Optional: `SENZING_LICENSE_B64_FILE` adds a license; `SENZING_CONFIGPATH` overrides `/etc/opt/senzing`.
+Known issue (pre-existing): `EngineIT`'s redo test calls `RedoJob.main`, which has been a continuous
+loop since the continuous-redoer change, so step 6 does not return on its own.
 
 Verified: two "Jane Doe" records resolve to one entity; search finds it; redo drains. The same flow
 works using **only the staged FAT-jar payload** (`LD_LIBRARY_PATH` + PIPELINE paths under

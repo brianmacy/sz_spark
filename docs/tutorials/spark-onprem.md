@@ -75,7 +75,7 @@ spark-submit \
   --conf spark.executor.memory=2g \              # JVM heap — modest; records stream
   --conf spark.executor.memoryOverhead=8g \      # NATIVE/off-heap: 4 GB engine + 1 GB/core
   --conf spark.speculation=false \               # engine calls are side effects (exactly-once)
-  --conf spark.executorEnv.LD_LIBRARY_PATH="/var/tmp/sz-spark-$JAR_SHA/lib" \   # MANDATORY (dlopen-by-soname)
+  --conf spark.executorEnv.LD_LIBRARY_PATH="/var/tmp/sz-spark-$JAR_SHA/lib" \   # optional since the native-aware loader
   --conf spark.executorEnv.SENZING_EXTRACT_DIR=/var/tmp \
   --conf spark.executorEnv.PGSSLMODE=require \
   --conf spark.yarn.appMasterEnv.SENZING_ENGINE_CONFIGURATION_JSON="$SENZING_ENGINE_CONFIGURATION_JSON" \
@@ -94,8 +94,9 @@ spark-submit \
 `≈ 4 GB + 1 GB × spark.executor.cores`; under-sizing gets executors OOM-killed. Memory scales with the
 same cores knob as concurrency.
 
-**The launch `LD_LIBRARY_PATH` is non-negotiable** — `$ORIGIN` does not cover the libraries `libSz`
-`dlopen`s by soname (DB plugin, etc.). It must be set at executor launch; there is no post-start fix.
+**The launch `LD_LIBRARY_PATH` is optional for the engine jobs**: the engine preloads the helpers
+`libSz` dlopens by soname and the SDK finds `libSz.so` through a native-aware class loader. Keep it if you
+stage the DB client closure into `lib/`; `InitJob` (SDK loaded directly) still needs it.
 
 ## 5. Run the other jobs
 

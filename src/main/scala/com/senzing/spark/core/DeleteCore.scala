@@ -13,12 +13,13 @@ object DeleteCore {
   def run(
       spark: SparkSession,
       input: Dataset[InputRecord],
-      runId: String
+      runId: String,
+      engineConfig: Option[String] = None
   ): SplitResult =
     SparkRecordOps.run(
       spark,
       input,
-      EngineWorker.factory(WorkerOp.Delete, runId, Verbs.delete),
+      EngineWorker.factory(WorkerOp.Delete, runId, Verbs.delete, engineConfig),
       acquire = () => (),
       release = () => SzEngineProvider.release()
     )

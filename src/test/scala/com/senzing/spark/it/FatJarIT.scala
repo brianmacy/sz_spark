@@ -11,8 +11,8 @@ import org.scalatest.funsuite.AnyFunSuite
 /**
  * Verifies the assembled FAT jar actually bundles the native payload (marker lib + siblings + the
  * CONFIGPATH tree). Build it first locally: `sbt stageNatives -J-Xmx8g assembly`. The LIVE
- * dlopen-by-soname proof (load + a real verb on a slim image with no system Senzing, using launch
- * `LD_LIBRARY_PATH`) runs on the supported executor image — see docs/RUNBOOK.md.
+ * native-load proof is `SelfCheck` from this jar (no `LD_LIBRARY_PATH` needed) and `NativeLoaderIT`
+ * — see docs/RUNBOOK.md.
  */
 final class FatJarIT extends AnyFunSuite {
 

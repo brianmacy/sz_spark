@@ -71,8 +71,8 @@ sbt -J-Xmx8g assembly                         # FAT/uber jar (sbt-assembly; big 
 
 Spark deps must be `% "provided"` (Spark is on the cluster); the Senzing SDK jar
 (`unmanagedJars` → `/opt/senzing/er/sdk/java/sz-sdk.jar`, not a Maven coordinate) + natives are bundled
-instead. Executors need `spark.executorEnv.LD_LIBRARY_PATH=<extract>/lib` set at **launch** (see the
-FAT-jar contract). The full implementation design lives in **`docs/DESIGN.md`** (proposed; has an
+instead. Executors no longer need a launch-time `LD_LIBRARY_PATH` (the SDK is defined by a native-aware
+class loader; setting it still works — see the FAT-jar contract). The full implementation design lives in **`docs/DESIGN.md`** (proposed; has an
 open-risks list to close before it's final); the dependency-ordered build sequence with per-milestone
 test gates is in **`docs/IMPLEMENTATION_PLAN.md`** (M0→M16).
 
@@ -96,7 +96,8 @@ These are the decisions an implementation must honor. The **rationale and step-b
   → `architecture/threading-and-engine-lifecycle`
 - **Init is a separate run-once step, never in the Spark job** — two environments in one process
   corrupt the C library and crash. Init applies schema DDL + registers the default config, then exits;
-  the job assumes both exist. Engine config from `SENZING_ENGINE_CONFIGURATION_JSON` (never hardcoded);
+  the job assumes both exist. Engine config from `SENZING_ENGINE_CONFIGURATION_JSON` (never hardcoded), or
+  an optional explicit `engineConfig` the driver passes to the cores (travels in the task closure, wins);
   set `PGSSLMODE=require` for cloud Postgres. → `architecture/initialization-separation`
 - **Outputs:** add/update/delete emit deduped `AFFECTED_ENTITIES` parsed from the `SZ_WITH_INFO`
   response (not a separate query); search emits request + results. → `architecture/output-dataframes`
@@ -111,9 +112,12 @@ These are the decisions an implementation must honor. The **rationale and step-b
   --set-rpath '$ORIGIN'` (no `--force-rpath`) **only on bundled siblings lacking a RUNPATH** (never on
   `libSz.so`) → `sbt assembly`; at runtime self-extract once per node and rewrite the three **distinct**
   PIPELINE paths (`SUPPORTPATH`→data, `RESOURCEPATH`→resources, `CONFIGPATH`→config tree under
-  `resources/templates/`). **`$ORIGIN` does NOT cover dlopen-by-soname** (`libszvec`/`libszzstd`/DB
-  plugin), so you also need `spark.executorEnv.LD_LIBRARY_PATH=<extract>/lib` set at executor **launch**
-  + ordered `System.load` of siblings before `libSz`. → `build/fat-jar-and-native-extraction`,
+  `resources/templates/`). Ordered `System.load` of the helpers libSz dlopens by soname (`libgcc_s`/
+  `libszzstd`/`libszvec`), then the SDK implementation (`com.senzing.sdk.core`) is defined by ONE
+  `NativeAwareClassLoader` per JVM whose `findLibrary` answers from `<extract>/lib`, so the SDK's own
+  `System.loadLibrary("Sz")` binds libSz.so with **no launch-time `LD_LIBRARY_PATH`** (still supported as
+  an alternative). Only `SzCoreEnvironmentFactory` may name `com.senzing.sdk.core`; everything else uses
+  the SDK interfaces. → `build/fat-jar-and-native-extraction`,
   `build/config-overrides`
 
 ## Hard constraints / anti-patterns

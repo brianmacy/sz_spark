@@ -6,6 +6,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Native loading without `LD_LIBRARY_PATH`.** The SDK's own `System.loadLibrary("Sz")` (in its `Native*Jni`
+  classes) only searched `java.library.path`, so a launch-time `LD_LIBRARY_PATH=<extract>/lib` was mandatory.
+  The engine now defines the SDK implementation (`com.senzing.sdk.core`) and `SzCoreEnvironmentFactory` (the
+  only sz_spark class naming it) through one `nativelib.NativeAwareClassLoader` per JVM whose `findLibrary`
+  answers from the extracted `lib/` (public JDK API, no SDK change). The SDK interfaces stay on the normal
+  class path, so everything else is unchanged. Seam: `engine.SzEnvironmentFactory` (`direct()` /
+  `nativeAware(libDir)`); `NativeLibLoader.loadHelpers` preloads the helpers but no longer `System.load`s
+  `libSz.so` (replaces `loadFatJarLibs`). Setting `LD_LIBRARY_PATH` still works; `InitJob` and an air-gapped
+  DB-client closure staged into `lib/` still need it. `NativeLoaderIT` proves it with `LD_LIBRARY_PATH` unset.
+- **Optional explicit engine config.** `AddCore`/`DeleteCore`/`SearchCore`.run, `RedoCore.drain`/`process`,
+  `GetCore.run`, `DepartedVerify.run` and `EngineWorker.factory` take `engineConfig: Option[String] = None`;
+  the value travels to the executors in the task closure and wins over `SENZING_ENGINE_CONFIGURATION_JSON`
+  (the default when `None`). The JVM's single environment pins the first config; a different one later fails
+  loudly. `ExplicitConfigIT` proves it with the env var unset.
 - **Record-transform plugin hook for loads.** `SENZING_RECORD_TRANSFORM_PLUGIN` / `SENZING_RECORD_TRANSFORM_CONFIG` on the executors
   load the same C-ABI plugin as `sz_queue_combined_consumer` (for example `libsz_semkey_transform.so`) and rewrite every add/update
   record before `addRecord`; unset = no hook. A rejected record dead-letters as `BAD_INPUT`; a plugin that cannot load fails the task.

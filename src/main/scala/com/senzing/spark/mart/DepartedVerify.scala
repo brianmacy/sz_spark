@@ -30,13 +30,18 @@ import com.senzing.spark.work.{ErrorCategory, ErrorTaxonomy}
  */
 object DepartedVerify {
 
-  def run(spark: SparkSession, candidates: DataFrame, stagingPath: String): DataFrame = {
+  def run(
+      spark: SparkSession,
+      candidates: DataFrame,
+      stagingPath: String,
+      engineConfig: Option[String] = None
+  ): DataFrame = {
     import spark.implicits._
     val keys: Dataset[(String, String)] =
       candidates.select(col("data_source").as[String], col("record_id").as[String]).distinct()
 
     val gone: Dataset[(String, String)] = keys.mapPartitions { it =>
-      val env = SzEngineProvider.acquire()
+      val env = SzEngineProvider.acquire(engineConfig)
       Option(TaskContext.get())
         .foreach(_.addTaskCompletionListener[Unit](_ => SzEngineProvider.release()))
       val engine = env.getEngine()

@@ -33,15 +33,28 @@ sufficient. Verified via `readelf -d`:
   `libmysqlclient`) is also dlopen'd by soname.
 - **The dynamic linker applies a lib's RUNPATH only to its direct NEEDED — never to dlopen-by-soname.**
 
-So you need **both**:
+What the engine does (FAT jar):
 
-1. `spark.executorEnv.LD_LIBRARY_PATH=<extractDir>/lib` set at executor **launch** (the only mechanism
-   that resolves dlopen-by-soname; never mutate it post-JVM-start).
-2. `System.load()` every non-system sibling in **dependency order before `libSz`**:
-   `libgcc_s.so.1 → libszzstd.so → libszvec.so → <db-plugin>.so → libSz.so`, so each later dlopen
-   returns an already-loaded handle.
+1. `System.load()` the helpers in **dependency order** (`NativeLibLoader.loadHelpers`):
+   `libgcc_s.so.1 → libszzstd.so → libszvec.so`, so each later dlopen returns an already-loaded handle.
+2. Do **not** `System.load` `libSz.so`. The SDK's `Native*Jni` classes run `System.loadLibrary("Sz")`
+   themselves, and JNI binds a library to the class loader of the class that loads it. The engine
+   defines `com.senzing.sdk.core` (plus `SzCoreEnvironmentFactory`, the only sz_spark class naming it)
+   child-first through a `NativeAwareClassLoader` whose `findLibrary(name)` returns
+   `<extractDir>/lib/System.mapLibraryName(name)`; the JDK asks that before `java.library.path`, so
+   libSz.so is found with **no `LD_LIBRARY_PATH`**. The SDK interfaces (`com.senzing.sdk.*`) stay on
+   the normal class path, so callers use `SzEnvironment`/`SzEngine`/`SzException` unchanged. One such
+   loader per JVM (`SzEnvironmentFactory.nativeAware`, called once by `SzEngineProvider`).
 
-(The old "patchelf `$ORIGIN` means no `LD_LIBRARY_PATH` needed" claim was wrong for this dist.)
+Without the loader, `System.load`-ing libSz.so by absolute path does NOT satisfy the SDK's own
+`System.loadLibrary("Sz")` (it searches `java.library.path`) — that is why `LD_LIBRARY_PATH` used to be
+mandatory. Setting `spark.executorEnv.LD_LIBRARY_PATH=<extractDir>/lib` at launch still works as an
+alternative, and remains the way to resolve a DB client closure staged into `lib/`.
+
+Verified (arm64 Ubuntu 24.04, SQLite): `NativeLoaderIT` and the FAT jar's `SelfCheck` both resolve
+records with `LD_LIBRARY_PATH` unset; the SQLite plugin was found without being preloaded. Not yet
+verified without `LD_LIBRARY_PATH`: PostgreSQL/MSSQL/MySQL plugins (their client libraries come from the
+system loader path as before).
 
 ## What to bundle
 
@@ -58,7 +71,7 @@ So you need **both**:
   `os.arch`.
 - Extract **once per node** into `$SENZING_EXTRACT_DIR` (default `/var/tmp`) under a SHA-256-of-jar dir,
   guarded by a file lock + `.ready` sentinel (atomic: unpack to `.tmp`, fsync, rename).
-- Ordered `System.load` (above), then `SzCoreEnvironment.build()`.
+- Ordered helper `System.load` (above), then `SzEnvironmentFactory.nativeAware(libDir).build(...)`.
 - Rewrite the **three distinct** PIPELINE paths in the engine config: `SUPPORTPATH`→`<extract>/data`,
   `RESOURCEPATH`→`<extract>/resources`, `CONFIGPATH`→`<extract>/config`. They are **not**
   interchangeable; pointing CONFIGPATH at `resources/` root silently degrades resolution.

@@ -18,6 +18,10 @@ last. Verified in `sz-spark-pr-test:local`: `scalafmtCheckAll test` 172/172; `it
 `ExplicitConfigIT` 1/1, `NativeLoaderIT` 3/3, `EngineIT` 5/5 — it has 5 tests, not 6); `EntityMartSinkIT` 10/10.
 Background tasks at handoff: none.
 
+**/prep fast rerun (2026-11-01) @ `35ded11`: all green.** `sz-spark-pr-test:local`: `scalafmtCheckAll compile test`
+172/172; `it-local.sh` exit 0 (`ExplicitConfigIT` 1/1, `NativeLoaderIT` 3/3, `EngineIT` 5/5, no hang);
+`EntityMartSinkIT` 10/10. PR title/body refreshed. FAQ testing/redo entries updated for `RedoJob.runBatch`.
+
 ## ★ Current session (2026-10-31) — native loading without `LD_LIBRARY_PATH` + optional explicit engine config
 
 Branch `brian/findlibrary-loader`. (1) The SDK implementation (`com.senzing.sdk.core`) + `SzCoreEnvironmentFactory` are defined by

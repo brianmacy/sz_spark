@@ -3,10 +3,8 @@
 ## NOW: land PR #36 (`brian/findlibrary-loader`)
 
 1. DONE: `EngineIT` redo-test hang fixed (`RedoJob.runBatch`); `scripts/it-local.sh` exits 0, `EngineIT` 5/5.
-2. Retitle PR #36 to cover the entity-mart work (suggested: "Native loading via findLibrary, explicit engine config,
-   entity mart fixes"), fix the body's "`. **Entity mart format.**`" item (missing number 4), and change
-   "`EngineIT` 4/5" to 5/5 (redo hang fixed).
-3. Merge PR #36 when CI is green and the owner approves.
+2. DONE: PR #36 retitled and body refreshed (entity-mart item 4, `EngineIT` 5/5).
+3. Merge PR #36 (`35ded11`+; /prep rerun READY 2026-11-01, CI green) when the owner approves.
 4. Verify loading without `LD_LIBRARY_PATH` with the PostgreSQL/MSSQL/MySQL plugins and on a real Spark cluster.
 
 ## NOW: land the record-transform plugin hook (branch `record-transform-plugin`)

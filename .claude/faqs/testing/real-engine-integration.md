@@ -25,11 +25,13 @@ only — never production/concurrent). The script:
 5. runs `NativeLoaderIT` with `LD_LIBRARY_PATH` UNSET (the SDK finds `libSz.so` through the
    native-aware class loader; it also asserts that without the loader `System.loadLibrary("Sz")` fails).
 6. runs `EngineIT` with `SZ_IT=1` and `-Dspark.master=local[2]`, overriding the default
-   `IntegrationTest` tag exclusion (last — see the known issue below).
+   `IntegrationTest` tag exclusion.
 
 Optional: `SENZING_LICENSE_B64_FILE` adds a license; `SENZING_CONFIGPATH` overrides `/etc/opt/senzing`.
-Known issue (pre-existing): `EngineIT`'s redo test calls `RedoJob.main`, which has been a continuous
-loop since the continuous-redoer change, so step 6 does not return on its own.
+`EngineIT`'s redo test must NOT call `RedoJob.main`: since the continuous-redoer change `main` loops
+forever (it pauses and re-polls on an empty queue), which hung the test. It calls `RedoJob.runBatch` (one
+loop iteration: drain, process, append; returns the batch size) until it returns 0, then asserts the queue
+drained, the output is `op=REDO` and no redo failed (fixed on PR #36, `35ded11`; `EngineIT` 5/5).
 
 Verified: two "Jane Doe" records resolve to one entity; search finds it; redo drains. The same flow
 works using **only the staged FAT-jar payload** (`LD_LIBRARY_PATH` + PIPELINE paths under

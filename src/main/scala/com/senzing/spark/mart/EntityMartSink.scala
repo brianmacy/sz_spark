@@ -108,23 +108,25 @@ abstract class AbstractDeltaSink(
       col("entity.entity_id").as("entity_id"),
       col("entity.entity_hash").as("new_hash")
     )
-    val idsV = tempView("gate")
-    fresh.select("entity_id").distinct().createOrReplaceTempView(idsV)
-    // SELECT (unlike DELETE/UPDATE) accepts an IN-subquery, so read only the batch's stored hashes.
-    val stored = spark.sql(
-      s"SELECT entity_id, entity_hash AS old_hash FROM ${locator("entity")} " +
-        s"WHERE entity_id IN (SELECT entity_id FROM $idsV)"
-    )
+    // The returned Dataset is lazy: `upsert` evaluates it AFTER its `entity` MERGE has written the
+    // new hashes, so reading the live table would gate every entity out and `entity_record`,
+    // `entity_doc` and `relationship` would never be written. Pin the stored hashes to the table
+    // version as of NOW (Delta time travel): every later evaluation sees the pre-upsert hashes. Pure
+    // SQL/DataFrame (no RDD, cache or temp view), so it also holds under Spark Connect.
+    val entityTable = locator("entity")
+    val version =
+      spark.sql(s"DESCRIBE HISTORY $entityTable LIMIT 1").select("version").head().getLong(0)
+    val stored = spark
+      .sql(s"SELECT entity_id, entity_hash AS old_hash FROM $entityTable VERSION AS OF $version")
+      .join(fresh.select("entity_id").distinct(), Seq("entity_id"), "left_semi")
     val changed = fresh
       .join(stored, Seq("entity_id"), "left")
       .where(col("old_hash").isNull || col("new_hash") =!= col("old_hash"))
       .select(col("entity_id").as("changed_id"))
       .distinct()
-    val out = parsed
+    parsed
       .join(changed, col("entity.entity_id") === col("changed_id"), "left_semi")
       .as[ParsedEntity]
-    spark.catalog.dropTempView(idsV)
-    out
   }
 
   /**

@@ -94,7 +94,9 @@ change hash.
 
 Reference gaps status (tracked in NEXT_STEPS): (1) **✅ hash change-gate wired** —
 `EntityMartSink.selectChanged` drops entities whose stored `entity_hash` is unchanged before frames are
-built ("skip if unchanged"); the canonical hash uses US/RS separators (collision-safety). (2) **✅
+built ("skip if unchanged"). The stored hashes are read `VERSION AS OF` the `entity` table version current when
+the gate is built: the gate is lazy and `upsert` evaluates it after its `entity` MERGE, so reading the live
+table would gate a first refresh out of `entity_record`/`entity_doc`/`relationship`. The canonical hash uses US/RS separators (collision-safety). (2) **✅
 orphan-record reconcile** — `reconcileDepartedRecords` removes an `entity_record` row when its record
 leaves a surviving entity (delete); a MOVE is re-keyed by the gaining entity's refresh. ✅ **Phase-2
 hardening DONE**: departed candidates pass through the injected `verifyDeparted` seam (default identity,

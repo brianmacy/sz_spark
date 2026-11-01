@@ -8,7 +8,7 @@ import org.scalatest.funsuite.AnyFunSuite
 
 import com.senzing.spark.IntegrationTest
 import com.senzing.spark.mart.EntityMartRows._
-import com.senzing.spark.mart.{EntityMartRows, GetResult, LocalDeltaSink}
+import com.senzing.spark.mart.{EntityMartRows, EntityMartSync, GetResult, LocalDeltaSink}
 
 /**
  * Executes the real [[LocalDeltaSink]] MERGE/DELETE SQL against a local OSS delta-spark table — the
@@ -172,6 +172,31 @@ final class EntityMartSinkIT extends AnyFunSuite with BeforeAndAfterAll {
     assert(sink.selectChanged(Seq(parsed(1L, "H2", Seq(("DSg", "R1")))).toDS()).count() == 1L)
     // Brand-new entity (no stored hash) ⇒ passes.
     assert(sink.selectChanged(Seq(parsed(999L, "Hx", Seq.empty)).toDS()).count() == 1L)
+  }
+
+  test(
+    "first refresh of a new entity writes entity_record, entity_doc and relationship",
+    IntegrationTest
+  ) {
+    val spk = spark
+    import spk.implicits._
+    val sink = new LocalDeltaSink(spark, base)
+    sink.initTables()
+    val rels = Seq(rel(500, 501, "POSSIBLY_RELATED", Some("+NAME"), None))
+    val fresh = parsed(500L, "Hnew", Seq(("DSf", "F1"))).copy(relationships = rels)
+    // The production gate -> frames -> upsert path (EntityMartSync.runOnce), not a direct upsert:
+    // the gate must judge the entity against the hashes stored BEFORE this refresh's entity MERGE.
+    EntityMartSync.applyRefresh(spk, sink, Seq(fresh).toDS(), spk.emptyDataset[GetResult], 40)
+
+    def count(table: String, where: String): Long =
+      spark.sql(s"SELECT 1 FROM delta.`$base/$table` WHERE $where").count()
+    assert(count("entity", "entity_id = 500") == 1L)
+    assert(recordIds(500L) == Set("F1"), "entity_record written on the first refresh")
+    assert(count("entity_doc", "entity_id = 500") == 1L, "entity_doc written on the first refresh")
+    assert(
+      count("relationship", "entity_id_lo = 500 AND entity_id_hi = 501") == 1L,
+      "relationship written on the first refresh"
+    )
   }
 
   test(

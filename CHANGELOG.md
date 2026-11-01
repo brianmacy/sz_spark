@@ -54,6 +54,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `redoBatch`). Transient (`NonFatal`) failures are logged and the loop continues; only a fatal error
   exits. `RedoSourceSpec` green.
 
+### Fixed
+- **Entity mart: a first refresh now writes `entity_record`, `entity_doc` and `relationship`.** The
+  `entity_hash` change-gate (`AbstractDeltaSink.selectChanged`) returned a lazy Dataset that `upsert`
+  evaluated only after its `entity` MERGE had stored the new hashes, so every entity looked unchanged and the
+  other three tables were never written (only `entity` was). The gate now reads the stored hashes pinned to
+  the `entity` table version current when the gate is built (`DESCRIBE HISTORY` + `VERSION AS OF`), so every
+  later evaluation sees the pre-upsert hashes. Pure SQL/DataFrame (no RDD, cache or temp view), so it also
+  works under Spark Connect. The gate-and-apply step is `EntityMartSync.applyRefresh`;
+  `EntityMartSinkIT` covers a first refresh through it.
+
 ## [0.4.0] - 2026-08-17
 
 ### Added

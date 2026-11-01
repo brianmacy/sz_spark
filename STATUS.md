@@ -1,5 +1,16 @@
 # Project Status
 
+## ★ PR #36 handoff (2026-11-01) — `brian/findlibrary-loader` @ `b7540d6`, open, CI green, NOT merged
+
+Commits: `fe99434` native loading via `ClassLoader.findLibrary` + optional explicit engine config; `306d9e1` entity mart
+first refresh writes `entity_record`/`entity_doc`/`relationship` (`VERSION AS OF` hash gate); `8116c40` mart writes
+`entity` last so a crashed refresh replays fully; `b7540d6` mart format (VARIANT `entity_doc`, comments, UC
+informational keys). /prep fast (2026-11-01, `sz-spark-pr-test:local` arm64 container, Senzing 4.4.3, SQLite):
+`scalafmtCheckAll compile test` 172/172; `EntityMartSinkIT` 10/10 (first run OOM-killed in the shared Docker VM,
+rerun clean); `scripts/it-local.sh` InitJob OK, `ExplicitConfigIT` 1/1, `NativeLoaderIT` 3/3,
+`EngineIT` 5 of 6 pass and the redo test hangs (thread dump: `RedoJob.pause` <- `RedoJob.main` <- `EngineIT.scala:135`;
+the continuous loop never returns; pre-existing, unfixed). Background tasks at handoff: none. Working tree: clean.
+
 ## ★ Current session (2026-10-31) — native loading without `LD_LIBRARY_PATH` + optional explicit engine config
 
 Branch `brian/findlibrary-loader`. (1) The SDK implementation (`com.senzing.sdk.core`) + `SzCoreEnvironmentFactory` are defined by

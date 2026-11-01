@@ -44,5 +44,4 @@ env -u LD_LIBRARY_PATH SZ_IT_ENGINE_CONFIG="$SENZING_ENGINE_CONFIGURATION_JSON" 
   sbt -batch "$IT_ARGS" "testOnly com.senzing.spark.it.NativeLoaderIT"
 
 # 4) Integration tests against the real engine (override the default IntegrationTest exclusion).
-#    Runs last: its redo test calls the continuous RedoJob.main, which does not return on its own.
 sbt -batch "$IT_ARGS" "testOnly com.senzing.spark.it.EngineIT"

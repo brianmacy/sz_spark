@@ -4,7 +4,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 import scala.util.control.NonFatal
 
-import org.apache.spark.sql.SaveMode
+import org.apache.spark.sql.{SaveMode, SparkSession}
 
 import com.senzing.spark.core.RedoCore
 
@@ -33,16 +33,7 @@ object RedoJob extends SparkJob {
     try {
       while (!stopping.get() && !spark.sparkContext.isStopped) {
         try {
-          val batch = RedoCore.drain(a.redoBatch)
-          if (batch.isEmpty) {
-            pause(a.redoPauseMs, stopping)
-          } else {
-            val res = RedoCore.process(spark, a.runId, batch, a.partitions)
-            try {
-              res.good.write.mode(SaveMode.Append).parquet(a.outputPath)
-              res.errors.write.mode(SaveMode.Append).parquet(a.errorPath)
-            } finally res.unpersist()
-          }
+          if (runBatch(spark, a) == 0) pause(a.redoPauseMs, stopping)
         } catch {
           case NonFatal(e) =>
             log.error("redo iteration failed; continuing after pause", e)
@@ -50,6 +41,24 @@ object RedoJob extends SparkJob {
         }
       }
     } finally spark.stop()
+  }
+
+  /**
+   * One loop iteration, bounded and returning: drain up to `redoBatch` redo records and, if any,
+   * process them and APPEND the results. Returns the number drained (0 = the queue is empty right
+   * now; nothing is written). `main` repeats this until shutdown; `EngineIT` calls it until it
+   * returns 0, exercising the same drain/process/write path without the continuous loop.
+   */
+  private[spark] def runBatch(spark: SparkSession, a: JobArgs): Int = {
+    val batch = RedoCore.drain(a.redoBatch)
+    if (batch.nonEmpty) {
+      val res = RedoCore.process(spark, a.runId, batch, a.partitions)
+      try {
+        res.good.write.mode(SaveMode.Append).parquet(a.outputPath)
+        res.errors.write.mode(SaveMode.Append).parquet(a.errorPath)
+      } finally res.unpersist()
+    }
+    batch.size
   }
 
   /** Sleep up to `ms`, but wake within ~0.5s of a shutdown request so SIGTERM is responsive. */

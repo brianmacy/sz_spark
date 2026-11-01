@@ -8,8 +8,15 @@ first refresh writes `entity_record`/`entity_doc`/`relationship` (`VERSION AS OF
 informational keys). /prep fast (2026-11-01, `sz-spark-pr-test:local` arm64 container, Senzing 4.4.3, SQLite):
 `scalafmtCheckAll compile test` 172/172; `EntityMartSinkIT` 10/10 (first run OOM-killed in the shared Docker VM,
 rerun clean); `scripts/it-local.sh` InitJob OK, `ExplicitConfigIT` 1/1, `NativeLoaderIT` 3/3,
-`EngineIT` 5 of 6 pass and the redo test hangs (thread dump: `RedoJob.pause` <- `RedoJob.main` <- `EngineIT.scala:135`;
-the continuous loop never returns; pre-existing, unfixed). Background tasks at handoff: none. Working tree: clean.
+`EngineIT` 4 of 5 pass and the redo test hangs (thread dump: `RedoJob.pause` <- `RedoJob.main` <- `EngineIT.scala:135`;
+the continuous loop never returns).
+
+**Redo-test hang fixed (2026-11-01).** One loop iteration of `RedoJob` (drain, process, append) is now
+`RedoJob.runBatch`; `main` loops on it (behaviour unchanged, no new flag) and `EngineIT` calls it until the queue
+is empty, asserting the queue drained, output is `op=REDO`, no redo failed. `it-local.sh` no longer needs `EngineIT`
+last. Verified in `sz-spark-pr-test:local`: `scalafmtCheckAll test` 172/172; `it-local.sh` exit 0 (InitJob OK,
+`ExplicitConfigIT` 1/1, `NativeLoaderIT` 3/3, `EngineIT` 5/5 — it has 5 tests, not 6); `EntityMartSinkIT` 10/10.
+Background tasks at handoff: none.
 
 ## ★ Current session (2026-10-31) — native loading without `LD_LIBRARY_PATH` + optional explicit engine config
 

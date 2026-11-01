@@ -1,13 +1,11 @@
 # Next Steps
 
-## NOW: land PR #36 (`brian/findlibrary-loader` @ `b7540d6`)
+## NOW: land PR #36 (`brian/findlibrary-loader`)
 
-1. Fix the `EngineIT` redo-test hang (`EngineIT.scala:135` calls the continuous `RedoJob.main`, which sleeps in
-   `RedoJob.pause` forever on an empty queue): call `RedoCore.drain`/`process` once, or give `RedoJob` a bounded
-   run-once mode for the test. Then rerun `scripts/it-local.sh` in `sz-spark-pr-test:local` and confirm it exits 0.
+1. DONE: `EngineIT` redo-test hang fixed (`RedoJob.runBatch`); `scripts/it-local.sh` exits 0, `EngineIT` 5/5.
 2. Retitle PR #36 to cover the entity-mart work (suggested: "Native loading via findLibrary, explicit engine config,
-   entity mart fixes") and fix the body's "`. **Entity mart format.**`" item (missing number 4) and "`EngineIT` 4/5"
-   (it has 6 tests; 5 pass).
+   entity mart fixes"), fix the body's "`. **Entity mart format.**`" item (missing number 4), and change
+   "`EngineIT` 4/5" to 5/5 (redo hang fixed).
 3. Merge PR #36 when CI is green and the owner approves.
 4. Verify loading without `LD_LIBRARY_PATH` with the PostgreSQL/MSSQL/MySQL plugins and on a real Spark cluster.
 

@@ -76,6 +76,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   tables (keyed, `refresh_seq`-guarded MERGEs, so the replay is idempotent). Before, a crash after the first
   write (`entity`) made the rerun skip the rest. The gate-and-apply step is `EntityMartSync.applyRefresh`;
   `EntityMartSinkIT` covers a first refresh and a crashed-then-replayed refresh through it.
+- **`EngineIT` redo test no longer hangs.** It called `RedoJob.main`, which since the continuous redoer
+  never returns on an empty queue. One loop iteration (drain, process, append) is now
+  `RedoJob.runBatch`, which `main` loops on; the test calls it until the queue is empty and checks the
+  queue drained, output rows are `op=REDO` and no redo failed (an empty queue writes nothing). No new
+  job flag. `scripts/it-local.sh` no longer has to run `EngineIT` last.
 
 ## [0.4.0] - 2026-08-17
 

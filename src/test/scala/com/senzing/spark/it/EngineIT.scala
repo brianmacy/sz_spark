@@ -4,7 +4,8 @@ import java.nio.file.Files
 
 import com.senzing.spark.IntegrationTest
 import com.senzing.spark.engine.{ConfigDrift, SzEngineProvider}
-import com.senzing.spark.jobs.{AddUpdateJob, DeleteJob, RedoJob, SearchJob}
+import com.senzing.spark.jobs.{AddUpdateJob, DeleteJob, JobArgs, RedoJob, SearchJob}
+import com.senzing.spark.model.Op
 import org.apache.spark.sql.SparkSession
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -125,15 +126,33 @@ final class EngineIT extends AnyFunSuite {
     IntegrationTest
   ) {
     assume(enabled, "requires SZ_IT=1 + a live engine and database")
-    // Safe to run even if the queue is empty — RedoJob writes nothing in that case.
-    RedoJob.main(
+    // `RedoJob.main` is a continuous loop (never returns on an empty queue), so drive its bounded
+    // per-iteration entry point — the same drain/process/append path — until the queue is empty.
+    val out = tmpDir("rout")
+    val err = tmpDir("rerr")
+    val a = JobArgs.parse(
       Array(
-        s"output=${tmpDir("rout")}",
-        s"errors=${tmpDir("rerr")}",
+        s"output=$out",
+        s"errors=$err",
         s"staging=${tmpDir("rstg")}",
         "partitions=2",
         "redoBatch=1000"
       )
     )
+    val spark = verifySession()
+    try {
+      // Redo begets redo, so keep draining; the round cap only guards against a runaway queue.
+      val drained = Iterator.continually(RedoJob.runBatch(spark, a)).take(1000).takeWhile(_ > 0).sum
+      assert(RedoJob.runBatch(spark, a) == 0, "the redo queue must drain to empty")
+      if (drained == 0)
+        assert(!new java.io.File(out).exists, "an empty queue must write nothing")
+      else {
+        val ops = spark.read.parquet(out).select("op").distinct().collect().map(_.getString(0))
+        assert(ops.forall(_ == Op.Redo), s"redo output must be tagged op=REDO, got ${ops.toSeq}")
+        val errCount =
+          if (new java.io.File(err).exists) spark.read.parquet(err).count() else 0L
+        assert(errCount == 0L, s"$drained redo records drained; $errCount failed")
+      }
+    } finally spark.stop()
   }
 }

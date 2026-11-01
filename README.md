@@ -121,10 +121,11 @@ Without it the schema step is silently skipped and later jobs fail as "engine no
 
 ## Run
 
-Every job is a `spark-submit` from the one jar. Because `libSz` dlopens plugins **by soname**,
-`LD_LIBRARY_PATH` must point at the jar's self-extract `lib/` dir **at JVM launch** — a per-jar path
-`$SENZING_EXTRACT_DIR/sz-spark-<sha256-of-jar>/lib`. The snippet below computes it; reuse it in each
-example.
+Every job is a `spark-submit` from the one jar. The engine jobs find `libSz.so` in the jar's
+self-extract `lib/` dir through a native-aware class loader, so they no longer need `LD_LIBRARY_PATH`;
+`InitJob` loads the SDK directly and still needs it to point at that dir **at JVM launch** — a per-jar path
+`$SENZING_EXTRACT_DIR/sz-spark-<sha256-of-jar>/lib`. The snippet below computes it (harmless for the
+engine jobs); reuse it in each example.
 
 ```bash
 # Common docker-run scaffold. Mount your data, pass the engine config, set LD_LIBRARY_PATH.

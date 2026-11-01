@@ -6,17 +6,17 @@ import java.util.concurrent.locks.ReentrantReadWriteLock
 import scala.jdk.CollectionConverters._
 
 import com.senzing.sdk.{SzEngine, SzEnvironment}
-import com.senzing.sdk.core.SzCoreEnvironment
 import com.senzing.spark.nativelib._
 
 /**
  * The per-executor-JVM Senzing engine singleton. Built ONCE per JVM (FAT-jar self-extraction +
- * ordered native load + `SzCoreEnvironment.build`), destroyed only at JVM shutdown via one ordered
- * hook. `acquire`/`release` maintain a liveness counter only. Verbs run under a read lock; config
- * reinit takes the write lock to quiesce in-flight verbs.
+ * ordered helper load + the SDK defined by a native-aware class loader, see
+ * [[SzEnvironmentFactory]]), destroyed only at JVM shutdown via one ordered hook.
+ * `acquire`/`release` maintain a liveness counter only. Verbs run under a read lock; config reinit
+ * takes the write lock to quiesce in-flight verbs.
  *
  * The lifecycle logic lives in [[EngineLifecycle]] (unit-tested); this object wires the real native
- * + SDK build path, which is exercised by FatJarIT / LoadIT.
+ * + SDK build path, which is exercised by SelfCheck (FAT jar) and the SZ_IT suites.
  */
 object SzEngineProvider {
 
@@ -24,6 +24,7 @@ object SzEngineProvider {
 
   private val rwl = new ReentrantReadWriteLock()
   @volatile private var extractRoot: Option[File] = None
+  private val configPin = new EngineConfigPin
 
   private val lifecycle =
     new EngineLifecycle(
@@ -40,8 +41,8 @@ object SzEngineProvider {
 
   private def buildEnv(): SzEnvironment = {
     GlibcCheck.enforce()
-    val base = EngineSettings.fromEnv(envMap)
-    val settings =
+    val base = configPin.resolve(envMap)
+    val (settings, factory) =
       if (NativeBootstrap.isFatJar()) {
         val arch = NativeBootstrap.archSegment(System.getProperty("os.arch", ""))
         val jar = new File(getClass.getProtectionDomain.getCodeSource.getLocation.toURI)
@@ -53,18 +54,14 @@ object SzEngineProvider {
         )
         extractRoot = Some(dest)
         val paths = NativePaths.under(dest)
-        // DB plugin is dlopen'd via the launch-time LD_LIBRARY_PATH; siblings loaded in order here.
-        NativeLibLoader.loadFatJarLibs(paths.libDir, dbPluginSoName = None)
-        EngineSettings.rewritePaths(base, paths)
-      } else base
+        // Helpers by absolute path, in order; libSz.so is then found by the SDK's own
+        // System.loadLibrary("Sz") through the native-aware loader — no LD_LIBRARY_PATH needed.
+        NativeLibLoader.loadHelpers(paths.libDir, dbPluginSoName = None)
+        (EngineSettings.rewritePaths(base, paths), SzEnvironmentFactory.nativeAware(paths.libDir))
+      } else (base, SzEnvironmentFactory.direct())
 
     SzEnvGuard.markBuilt()
-    SzCoreEnvironment
-      .newBuilder()
-      .instanceName(InstanceName)
-      .settings(settings)
-      .verboseLogging(false)
-      .build()
+    factory.build(InstanceName, settings)
   }
 
   private def cleanupExtract(): Unit =
@@ -77,8 +74,16 @@ object SzEngineProvider {
    */
   def nativeLibDir: Option[File] = extractRoot.map(r => NativePaths.under(r).libDir)
 
-  /** Acquire the shared environment (builds once); pair with [[release]] in a finally. */
-  def acquire(): SzEnvironment = lifecycle.acquire()
+  /**
+   * Acquire the shared environment (builds once); pair with [[release]] in a finally.
+   * `engineConfig` is an optional explicit engine config (e.g. supplied by the driver and captured
+   * in the task closure); it wins over `SENZING_ENGINE_CONFIGURATION_JSON`. The JVM has one
+   * environment, so a value that differs from the one it was built with fails loudly.
+   */
+  def acquire(engineConfig: Option[String] = None): SzEnvironment = {
+    configPin.offer(engineConfig)
+    lifecycle.acquire()
+  }
   def release(): Unit = lifecycle.release()
 
   /** The shared engine. */

@@ -27,6 +27,17 @@ From `SENZING_ENGINE_CONFIGURATION_JSON` (environment variable / secret) — nev
 carries the database connection string. For cloud-managed Postgres, set `PGSSLMODE=require` before the
 environment is built.
 
+## Can the driver pass the engine config explicitly instead?
+
+Yes (optional). The engine-facing cores take `engineConfig: Option[String] = None`
+(`AddCore`/`DeleteCore`/`SearchCore`.run, `RedoCore.drain`/`process`, `GetCore.run`,
+`DepartedVerify.run`, `EngineWorker.factory`). The value is captured in the task closure, so it reaches
+the executors with each task (fine for a ~25 kB config; no Spark conf or system properties involved),
+and `SzEngineProvider.acquire(engineConfig)` prefers it over `SENZING_ENGINE_CONFIGURATION_JSON`.
+`None` (the default) keeps today's behaviour: the env var. Because there is one environment per JVM,
+the first config seen is pinned (`EngineConfigPin`); a task that later brings a DIFFERENT config fails
+loudly instead of silently running against the wrong repository. `InitJob` still reads the env var.
+
 ## What about config baked into the FAT jar?
 
 Customized config *templates/resources* baked into the jar (see the build/config-overrides FAQ) are

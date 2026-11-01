@@ -12,8 +12,9 @@ They share the same binding facts (see `RUNBOOK.md` / `DATABRICKS.md` for the re
 
 - Build the FAT jar locally from a licensed dist (`sbt stageNatives && sbt -J-Xmx4g assembly`); note its
   `sha256` — the self-extraction dir is `$SENZING_EXTRACT_DIR/sz-spark-<sha>/`.
-- **Set `LD_LIBRARY_PATH=<extractDir>/lib` at executor LAUNCH** (`spark.executorEnv...` / cluster env) —
-  mandatory for dlopen-by-soname; no post-JVM-start substitute.
+- **`LD_LIBRARY_PATH=<extractDir>/lib` at executor launch is optional** for the engine jobs (the SDK finds
+  `libSz.so` through a native-aware class loader); still needed by `InitJob` and when the DB client
+  closure is staged into `lib/`.
 - **Size `spark.executor.memoryOverhead ≈ 4 GB + 1 GB/core`** (native/off-heap), not JVM heap.
 - **GLIBC ≥ 2.34** on workers (EMR: use 7.x/AL2023, not 6.x/AL2). Each worker needs the DB-client libs
   (`libpq.so.5` for PG) + OpenSSL 3.

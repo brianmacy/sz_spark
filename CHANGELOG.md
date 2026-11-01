@@ -6,6 +6,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Entity mart format: VARIANT document, comments, Unity Catalog constraints.** `entity_doc.entity_json` is now
+  `VARIANT` (`parse_json`; Delta `variantType` feature), so fields are read by path without re-parsing. Every mart
+  table and column has a `COMMENT`. On `sink=uc` the tables get informational keys: PRIMARY KEY `RELY` on
+  `entity(entity_id)`, `entity_record(data_source, record_id)`, `relationship(entity_id_lo, entity_id_hi)`, and
+  FOREIGN KEY `NOT ENFORCED NORELY` from `entity_record.entity_id` and `relationship.entity_id_lo`/`_hi` to
+  `entity`; the path-based local sink creates none. A mart created before this stops at `initTables` with
+  `entity_json is STRING` and the in-place migration to run (`EntityMartSchema.entityDocVariantMigration`, keeps
+  every row). CDF, deletion vectors, liquid clustering, the `refresh_seq` guard and the entity-last write order
+  are unchanged. No numeric `relationship.match_level` was added: the V4 `getEntity` response has only
+  `MATCH_LEVEL_CODE`. `EntityMartSchemaSpec` + 2 new `EntityMartSinkIT` cases.
+- **Native loading without `LD_LIBRARY_PATH`.** The SDK's own `System.loadLibrary("Sz")` (in its `Native*Jni`
+  classes) only searched `java.library.path`, so a launch-time `LD_LIBRARY_PATH=<extract>/lib` was mandatory.
+  The engine now defines the SDK implementation (`com.senzing.sdk.core`) and `SzCoreEnvironmentFactory` (the
+  only sz_spark class naming it) through one `nativelib.NativeAwareClassLoader` per JVM whose `findLibrary`
+  answers from the extracted `lib/` (public JDK API, no SDK change). The SDK interfaces stay on the normal
+  class path, so everything else is unchanged. Seam: `engine.SzEnvironmentFactory` (`direct()` /
+  `nativeAware(libDir)`); `NativeLibLoader.loadHelpers` preloads the helpers but no longer `System.load`s
+  `libSz.so` (replaces `loadFatJarLibs`). Setting `LD_LIBRARY_PATH` still works; `InitJob` and an air-gapped
+  DB-client closure staged into `lib/` still need it. `NativeLoaderIT` proves it with `LD_LIBRARY_PATH` unset.
+- **Optional explicit engine config.** `AddCore`/`DeleteCore`/`SearchCore`.run, `RedoCore.drain`/`process`,
+  `GetCore.run`, `DepartedVerify.run` and `EngineWorker.factory` take `engineConfig: Option[String] = None`;
+  the value travels to the executors in the task closure and wins over `SENZING_ENGINE_CONFIGURATION_JSON`
+  (the default when `None`). The JVM's single environment pins the first config; a different one later fails
+  loudly. `ExplicitConfigIT` proves it with the env var unset.
 - **Record-transform plugin hook for loads.** `SENZING_RECORD_TRANSFORM_PLUGIN` / `SENZING_RECORD_TRANSFORM_CONFIG` on the executors
   load the same C-ABI plugin as `sz_queue_combined_consumer` (for example `libsz_semkey_transform.so`) and rewrite every add/update
   record before `addRecord`; unset = no hook. A rejected record dead-letters as `BAD_INPUT`; a plugin that cannot load fails the task.
@@ -39,6 +63,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   is always processed before exit (residual loss window on hard-kill is one in-flight batch, bounded by
   `redoBatch`). Transient (`NonFatal`) failures are logged and the loop continues; only a fatal error
   exits. `RedoSourceSpec` green.
+
+### Fixed
+- **Entity mart: a first refresh now writes `entity_record`, `entity_doc` and `relationship`.** The
+  `entity_hash` change-gate (`AbstractDeltaSink.selectChanged`) returned a lazy Dataset that `upsert`
+  evaluated only after its `entity` MERGE had stored the new hashes, so every entity looked unchanged and the
+  other three tables were never written (only `entity` was). The gate now reads the stored hashes pinned to
+  the `entity` table version current when the gate is built (`DESCRIBE HISTORY` + `VERSION AS OF`), so every
+  later evaluation sees the pre-upsert hashes. Pure SQL/DataFrame (no RDD, cache or temp view), so it also
+  works under Spark Connect. `upsert` also writes `entity` LAST (it holds the hashes the gate reads, so it is
+  the commit marker): a crash part-way through a refresh leaves the old hashes and the rerun redoes the other
+  tables (keyed, `refresh_seq`-guarded MERGEs, so the replay is idempotent). Before, a crash after the first
+  write (`entity`) made the rerun skip the rest. The gate-and-apply step is `EntityMartSync.applyRefresh`;
+  `EntityMartSinkIT` covers a first refresh and a crashed-then-replayed refresh through it.
+- **`EngineIT` redo test no longer hangs.** It called `RedoJob.main`, which since the continuous redoer
+  never returns on an empty queue. One loop iteration (drain, process, append) is now
+  `RedoJob.runBatch`, which `main` loops on; the test calls it until the queue is empty and checks the
+  queue drained, output rows are `op=REDO` and no redo failed (an empty queue writes nothing). No new
+  job flag. `scripts/it-local.sh` no longer has to run `EngineIT` last.
 
 ## [0.4.0] - 2026-08-17
 

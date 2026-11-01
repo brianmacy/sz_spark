@@ -7,8 +7,9 @@ import com.senzing.spark.work._
 /**
  * The per-partition worker factory: binds the shared per-JVM engine + config drift to an
  * op-specific verb, with each verb under the read lock (a concurrent config reinit takes the write
- * lock). The factory runs on executors. Moved out of `jobs.RecordJob` so the engine-facing core
- * carries no transport/JSONL glue.
+ * lock). The factory runs on executors; `engineConfig` (an optional explicit engine config, see
+ * [[SzEngineProvider.acquire]]) travels to them inside this closure. Moved out of `jobs.RecordJob`
+ * so the engine-facing core carries no transport/JSONL glue.
  */
 object EngineWorker {
 
@@ -17,10 +18,11 @@ object EngineWorker {
   def factory(
       op: WorkerOp,
       runId: String,
-      verb: SzEngine => InputRecord => String
+      verb: SzEngine => InputRecord => String,
+      engineConfig: Option[String] = None
   ): () => RecordWorker =
     () => {
-      val env = SzEngineProvider.acquire()
+      val env = SzEngineProvider.acquire(engineConfig)
       val engine = env.getEngine()
       val drift = new ConfigDrift()
       val base = verb(engine)

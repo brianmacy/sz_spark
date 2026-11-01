@@ -8,14 +8,22 @@ Binding preconditions and operational guidance. See `docs/DESIGN.md` for rationa
   native libs are **not** redistributable — build the FAT jar locally; never publish it.
 - **GLIBC ≥ 2.34** on every executor image (verified floor; `GlibcCheck` enforces at startup). Confirm
   against your actual Databricks runtime.
-- **`spark.executorEnv.LD_LIBRARY_PATH=<extractDir>/lib` set at executor LAUNCH.** This is mandatory:
-  `libSz.so` dlopens `libszvec.so`/`libszzstd.so`/the DB plugin **by soname**, which `$ORIGIN`/RUNPATH
-  does not resolve. There is **no** post-JVM-start substitute — if the cluster cannot set this launch
-  env var, the deploy fails by design.
+- **Native loading needs no launch-time `LD_LIBRARY_PATH` (FAT jar).** The engine `System.load`s the
+  helpers `libSz.so` dlopens by soname (`libgcc_s`, `libszzstd`, `libszvec`) in dependency order, then
+  defines the SDK implementation (`com.senzing.sdk.core`) through a class loader whose `findLibrary`
+  answers from `<extractDir>/lib`, so the SDK's own `System.loadLibrary("Sz")` finds `libSz.so` there
+  (`SzEnvironmentFactory.nativeAware`). Setting `spark.executorEnv.LD_LIBRARY_PATH=<extractDir>/lib` at
+  executor launch still works exactly as before and remains the way to go when you stage the DB
+  client closure into `lib/` (air-gapped variant: those libraries are not preloaded). A non-FAT-jar run
+  against an installed dist (`InitJob`, dev runs) still needs `LD_LIBRARY_PATH=$SENZING_DIR/er/lib`.
 - **DB-client closure on the executor image** for your dialect (PostgreSQL: `libpq.so.5` + chain; MSSQL:
   ODBC; MySQL: `libmysqlclient`), or stage it into `lib/` (air-gapped variant) and rely on the launch
   `LD_LIBRARY_PATH`.
-- **`SENZING_ENGINE_CONFIGURATION_JSON`** provided as an env/secret (never hardcoded). Set
+- **Engine config**: `SENZING_ENGINE_CONFIGURATION_JSON` provided as an env/secret (never hardcoded),
+  or an explicit value passed from the driver to the engine-facing cores (`AddCore.run(...,
+  engineConfig = Some(json))`, likewise `DeleteCore`/`SearchCore`/`RedoCore`/`GetCore`/`DepartedVerify`)
+  which travels to the executors in the task closure and wins over the env var. One environment per
+  executor JVM, so every task in a JVM must use the same config (a different value fails loudly). Set
   `PGSSLMODE=require` for cloud Postgres.
 
 ## Executor memory sizing (CRITICAL — Senzing is native/off-heap)

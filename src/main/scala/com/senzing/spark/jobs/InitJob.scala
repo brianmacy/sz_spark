@@ -6,9 +6,7 @@ import java.sql.DriverManager
 
 import scala.jdk.CollectionConverters._
 
-import com.senzing.sdk.core.SzCoreEnvironment
-
-import com.senzing.spark.engine.SzEnvGuard
+import com.senzing.spark.engine.{SzEnvGuard, SzEnvironmentFactory}
 import com.senzing.spark.nativelib.EngineSettings
 
 /**
@@ -55,12 +53,9 @@ object InitJob {
     // (2) Default config registration — exactly ONE environment, guarded.
     // NOTE: wrap in a DB advisory lock (pg_advisory_lock / lock row) in production to close TOCTOU.
     SzEnvGuard.markBuilt()
-    val env = SzCoreEnvironment
-      .newBuilder()
-      .instanceName("sz-init")
-      .settings(EngineSettings.fromEnv(System.getenv().asScala.toMap))
-      .verboseLogging(false)
-      .build()
+    val env = SzEnvironmentFactory
+      .direct()
+      .build("sz-init", EngineSettings.fromEnv(System.getenv().asScala.toMap))
     try {
       val cm = env.getConfigManager
       ensureDefaultConfig(

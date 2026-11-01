@@ -80,12 +80,13 @@ object GetCore {
       spark: SparkSession,
       ids: Dataset[Long],
       stagingPath: String,
-      flags: java.util.Set[SzFlag] = ReplicationFlags.Flags
+      flags: java.util.Set[SzFlag] = ReplicationFlags.Flags,
+      engineConfig: Option[String] = None
   ): Dataset[GetResult] = {
     import spark.implicits._
 
     val staged: Dataset[GetResult] = ids.mapPartitions { it =>
-      val env = SzEngineProvider.acquire()
+      val env = SzEngineProvider.acquire(engineConfig)
       Option(TaskContext.get())
         .foreach(_.addTaskCompletionListener[Unit](_ => SzEngineProvider.release()))
       val engine = env.getEngine()

@@ -1,5 +1,12 @@
 # Next Steps
 
+## NOW: land PR #36 (`brian/findlibrary-loader`)
+
+1. DONE: `EngineIT` redo-test hang fixed (`RedoJob.runBatch`); `scripts/it-local.sh` exits 0, `EngineIT` 5/5.
+2. DONE: PR #36 retitled and body refreshed (entity-mart item 4, `EngineIT` 5/5).
+3. Merge PR #36 (`35ded11`+; /prep rerun READY 2026-11-01, CI green) when the owner approves.
+4. Verify loading without `LD_LIBRARY_PATH` with the PostgreSQL/MSSQL/MySQL plugins and on a real Spark cluster.
+
 ## NOW: land the record-transform plugin hook (branch `record-transform-plugin`)
 
 1. Open the PR, watch CI (`scalafmtCheckAll` + `sbt test`; the build now needs gcc + a JDK with `jni.h` for the shim), merge when green.

@@ -13,12 +13,13 @@ object SearchCore {
   def run(
       spark: SparkSession,
       input: Dataset[InputRecord],
-      runId: String
+      runId: String,
+      engineConfig: Option[String] = None
   ): SplitResult =
     SparkRecordOps.run(
       spark,
       input,
-      EngineWorker.factory(WorkerOp.Search, runId, Verbs.search),
+      EngineWorker.factory(WorkerOp.Search, runId, Verbs.search, engineConfig),
       acquire = () => (),
       release = () => SzEngineProvider.release()
     )

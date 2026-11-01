@@ -16,8 +16,8 @@ import com.senzing.spark.work.{InputRecord, WorkerOp}
 object RedoCore {
 
   /** Driver-side single dequeuer: drain up to `redoBatch` redo records (may return empty). */
-  def drain(redoBatch: Int): Seq[String] = {
-    val env = SzEngineProvider.acquire()
+  def drain(redoBatch: Int, engineConfig: Option[String] = None): Seq[String] = {
+    val env = SzEngineProvider.acquire(engineConfig)
     val engine = env.getEngine()
     try RedoSource.drainBatch(() => engine.getRedoRecord(), redoBatch)
     finally SzEngineProvider.release()
@@ -28,7 +28,8 @@ object RedoCore {
       spark: SparkSession,
       runId: String,
       batch: Seq[String],
-      partitions: Int
+      partitions: Int,
+      engineConfig: Option[String] = None
   ): SplitResult = {
     import spark.implicits._
     val base = batch.toDS.map(s => InputRecord("REDO", "", s))
@@ -36,7 +37,7 @@ object RedoCore {
     SparkRecordOps.run(
       spark,
       input,
-      EngineWorker.factory(WorkerOp.Redo, runId, Verbs.redo),
+      EngineWorker.factory(WorkerOp.Redo, runId, Verbs.redo, engineConfig),
       release = () => SzEngineProvider.release()
     )
   }

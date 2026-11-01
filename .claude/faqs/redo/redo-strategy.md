@@ -25,7 +25,9 @@ the **source** instead of input files:
 1. **Continuous / long-lived** (as of `bem_redo_continuous`) — `RedoJob` runs in **one long-lived Spark
    session** that loops: `RedoCore.drain` pulls a bounded batch on the driver, `RedoCore.process` fans a
    **non-empty** batch to the executors, and on an empty queue it pauses `redoPauseMs` (default 30000) and
-   re-polls. `drain`/`process` are split so an empty queue skips ALL Spark work. This **replaced** the
+   re-polls. `drain`/`process` are split so an empty queue skips ALL Spark work. One iteration (drain,
+   process, append) is `RedoJob.runBatch` (returns the batch size); `main` loops on it, and tests call it
+   directly until it returns 0 instead of calling the never-returning `main`. This **replaced** the
    earlier run-once + external-relaunch (Databricks Job / Airflow / cron) model, which burned ~30-60 s of
    Spark teardown/startup on every relaunch cycle. A scheduled one-shot is still viable where a long-lived
    daemon is undesirable, but the continuous loop is the maintained path.

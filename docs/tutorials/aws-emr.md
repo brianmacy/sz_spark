@@ -113,8 +113,9 @@ or Airflow/MWAA) — the redo queue refills, so it's recurring, one instance at 
 ## Gotchas
 
 - **EMR release / GLIBC** is the #1 trap — use EMR 7.x (AL2023). Verify glibc ≥ 2.34.
-- The launch `spark.executorEnv.LD_LIBRARY_PATH` (sha extract dir) is mandatory; `$ORIGIN` doesn't
-  cover dlopen-by-soname. If EMR can't set it, the deploy fails by design.
+- The launch `spark.executorEnv.LD_LIBRARY_PATH` (sha extract dir) is optional for the engine jobs (the
+  SDK finds `libSz.so` through a native-aware class loader); keep it if the DB client closure is staged
+  into `lib/`. `InitJob` still needs `LD_LIBRARY_PATH`.
 - `memoryOverhead` (not heap) carries the native engine — size `4 GB + 1 GB/core`.
 - Aurora Serverless v2 underperforms for Senzing — prefer provisioned IO-Optimized.
 - Bastion `InitJob` needs network to Aurora; never run init inside a Spark job (two envs/process crash).

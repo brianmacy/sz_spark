@@ -16,17 +16,21 @@ plugin) **by soname**. `$ORIGIN` / RUNPATH only resolves a library's **direct NE
 does **not** apply to dlopen-by-soname. So bundling the libs and `patchelf`-ing `$ORIGIN` is **not
 sufficient** on its own.
 
-**Fix (both are required):**
-1. Set `spark.executorEnv.LD_LIBRARY_PATH=<extractDir>/lib` **at executor launch** (cluster/job conf).
-   This is the only mechanism that resolves dlopen-by-soname; there is **no post-JVM-start substitute**
-   (mutating the env after the JVM starts does not work). If the cluster cannot set a launch env var,
-   the deploy fails by design.
-2. The loader `System.load()`s every sibling in dependency order **before** `libSz` so each later
-   dlopen finds an already-loaded handle:
-   `libgcc_s.so.1 → libszzstd.so → libszvec.so → <db-plugin>.so → libSz.so`.
+**How the engine handles it (FAT jar):**
+1. `NativeLibLoader.loadHelpers` `System.load()`s the helpers in dependency order so each later dlopen
+   finds an already-loaded handle: `libgcc_s.so.1 → libszzstd.so → libszvec.so`.
+2. `libSz.so` itself is loaded by the SDK's own `System.loadLibrary("Sz")`, which finds it through
+   the native-aware class loader that defines `com.senzing.sdk.core` (`SzEnvironmentFactory.nativeAware`,
+   whose `findLibrary` answers from `<extractDir>/lib`). No launch-time `LD_LIBRARY_PATH` is needed.
 
-This is the highest-risk area and is proven by `FatJarIT` on a slim image with no system Senzing. See
-[`BUILD.md`](BUILD.md) and FAQ `build/fat-jar-and-native-extraction`.
+If you still see this error: check that nothing else in the JVM loaded the SDK implementation first
+(JNI binds `libSz.so` to ONE class loader), and that the DB plugin's own dependencies resolve — set
+`spark.executorEnv.LD_LIBRARY_PATH=<extractDir>/lib` at executor launch when you stage the DB client
+closure into `lib/` (it still works exactly as before). `InitJob` and other non-FAT-jar runs load the SDK
+directly and need `LD_LIBRARY_PATH` pointing at the dist's `lib/`.
+
+This is the highest-risk area; `NativeLoaderIT` (scripts/it-local.sh) proves the loader path with
+`LD_LIBRARY_PATH` unset. See [`BUILD.md`](BUILD.md) and FAQ `build/fat-jar-and-native-extraction`.
 
 ## "GLIBC_2.xx not found" / glibc too old
 

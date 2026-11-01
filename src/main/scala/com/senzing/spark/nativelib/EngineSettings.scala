@@ -4,13 +4,25 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ObjectNode
 
 /**
- * Resolves `SENZING_ENGINE_CONFIGURATION_JSON` and, in FAT-jar mode, rewrites the three PIPELINE
- * paths to the extracted directories. Never hardcodes settings; never relies on `setupEnv`.
+ * Resolves the engine config (an explicit value, else `SENZING_ENGINE_CONFIGURATION_JSON`) and, in
+ * FAT-jar mode, rewrites the three PIPELINE paths to the extracted directories. Never hardcodes
+ * settings; never relies on `setupEnv`.
  */
 object EngineSettings {
 
   final val EnvVar = "SENZING_ENGINE_CONFIGURATION_JSON"
   private val mapper = new ObjectMapper()
+
+  /** An explicitly supplied engine config, trimmed; None when absent or blank. */
+  def explicitValue(explicit: Option[String]): Option[String] =
+    explicit.map(_.trim).filter(_.nonEmpty)
+
+  /**
+   * The engine config to use: an explicit value (e.g. supplied by the driver and carried to the
+   * executors in the task closure) wins; otherwise [[fromEnv]].
+   */
+  def resolve(explicit: Option[String], env: Map[String, String]): String =
+    explicitValue(explicit).getOrElse(fromEnv(env))
 
   /** Read the engine config from the environment; fail loudly if unset/blank. */
   def fromEnv(env: Map[String, String]): String =

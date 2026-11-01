@@ -8,6 +8,7 @@ import org.apache.spark.sql.functions.col
 import org.apache.spark.storage.StorageLevel
 
 import com.senzing.spark.glue.{GlueArgs, ShardIo}
+import com.senzing.spark.mart.EntityMartRows.ParsedEntity
 import com.senzing.spark.jobs.SparkJob
 import com.senzing.spark.model.StagingKind
 
@@ -115,15 +116,27 @@ object EntityMartSync extends SparkJob {
     val parsed = EntityMartRows.parse(spark, results).persist(StorageLevel.MEMORY_AND_DISK)
     try {
       parsed.count() // force the single parse pass now
-      // Change-gate: drop entities whose stored hash is unchanged, then build frames from the rest
-      // (the Entity Refresh Pattern's "skip if unchanged"). Tombstones ride `results`, so GONE bypasses.
-      val changed = sink.selectChanged(parsed)
-      val frames = EntityMartRows.framesOf(spark, changed, results)
-      sink.upsert(frames, refreshSeq)
+      applyRefresh(spark, sink, parsed, results, refreshSeq)
       sink.quarantine(results.filter(_.kind == GetKind.Error).toDF(), refreshSeq)
       sink.writeState(StateRefreshSeq, refreshSeq.toString)
       println(s"[entity-mart-sync] applied refresh_seq=$refreshSeq")
     } finally parsed.unpersist(blocking = false)
+  }
+
+  /**
+   * Change-gate, then apply: drop entities whose stored hash is unchanged, build the frames from
+   * the rest (the Entity Refresh Pattern's "skip if unchanged") and upsert them. Tombstones ride
+   * `results`, so GONE bypasses the gate.
+   */
+  private[spark] def applyRefresh(
+      spark: SparkSession,
+      sink: EntityMartSink,
+      parsed: Dataset[ParsedEntity],
+      results: Dataset[GetResult],
+      refreshSeq: Long
+  ): Unit = {
+    val changed = sink.selectChanged(parsed)
+    sink.upsert(EntityMartRows.framesOf(spark, changed, results), refreshSeq)
   }
 
   private def feedHasShards(spark: SparkSession, feed: String): Boolean = {

@@ -1,5 +1,38 @@
 # Project Status
 
+## ★ PR #36 handoff (2026-11-01) — `brian/findlibrary-loader` @ `b7540d6`, open, CI green, NOT merged
+
+Commits: `fe99434` native loading via `ClassLoader.findLibrary` + optional explicit engine config; `306d9e1` entity mart
+first refresh writes `entity_record`/`entity_doc`/`relationship` (`VERSION AS OF` hash gate); `8116c40` mart writes
+`entity` last so a crashed refresh replays fully; `b7540d6` mart format (VARIANT `entity_doc`, comments, UC
+informational keys). /prep fast (2026-11-01, `sz-spark-pr-test:local` arm64 container, Senzing 4.4.3, SQLite):
+`scalafmtCheckAll compile test` 172/172; `EntityMartSinkIT` 10/10 (first run OOM-killed in the shared Docker VM,
+rerun clean); `scripts/it-local.sh` InitJob OK, `ExplicitConfigIT` 1/1, `NativeLoaderIT` 3/3,
+`EngineIT` 4 of 5 pass and the redo test hangs (thread dump: `RedoJob.pause` <- `RedoJob.main` <- `EngineIT.scala:135`;
+the continuous loop never returns).
+
+**Redo-test hang fixed (2026-11-01).** One loop iteration of `RedoJob` (drain, process, append) is now
+`RedoJob.runBatch`; `main` loops on it (behaviour unchanged, no new flag) and `EngineIT` calls it until the queue
+is empty, asserting the queue drained, output is `op=REDO`, no redo failed. `it-local.sh` no longer needs `EngineIT`
+last. Verified in `sz-spark-pr-test:local`: `scalafmtCheckAll test` 172/172; `it-local.sh` exit 0 (InitJob OK,
+`ExplicitConfigIT` 1/1, `NativeLoaderIT` 3/3, `EngineIT` 5/5 — it has 5 tests, not 6); `EntityMartSinkIT` 10/10.
+Background tasks at handoff: none.
+
+**/prep fast rerun (2026-11-01) @ `35ded11`: all green.** `sz-spark-pr-test:local`: `scalafmtCheckAll compile test`
+172/172; `it-local.sh` exit 0 (`ExplicitConfigIT` 1/1, `NativeLoaderIT` 3/3, `EngineIT` 5/5, no hang);
+`EntityMartSinkIT` 10/10. PR title/body refreshed. FAQ testing/redo entries updated for `RedoJob.runBatch`.
+
+## ★ Current session (2026-10-31) — native loading without `LD_LIBRARY_PATH` + optional explicit engine config
+
+Branch `brian/findlibrary-loader`. (1) The SDK implementation (`com.senzing.sdk.core`) + `SzCoreEnvironmentFactory` are defined by
+one `NativeAwareClassLoader` per JVM whose `findLibrary` answers from the extracted `lib/`, so the SDK's own `System.loadLibrary("Sz")`
+binds libSz.so with no launch-time `LD_LIBRARY_PATH` (still supported). Seam: `engine.SzEnvironmentFactory`. (2) Optional
+`engineConfig: Option[String]` on the engine-facing cores, carried in the task closure, wins over the env var (`EngineConfigPin`).
+Verified in an arm64 Ubuntu 24.04 container (JDK 17, Senzing 4.4.3): `scalafmtCheckAll test` 165/165; `ExplicitConfigIT` 1/1 and
+`NativeLoaderIT` 3/3 (`LD_LIBRARY_PATH` unset); FAT jar `SelfCheck` OK both without and with `LD_LIBRARY_PATH`. NOT verified
+without `LD_LIBRARY_PATH`: PostgreSQL/MSSQL/MySQL plugins, a Spark cluster. Pre-existing: `EngineIT`'s redo test hangs (it calls the
+continuous `RedoJob.main`); it-local.sh now runs it last.
+
 ## ★ Current session (2026-10-07) — record-transform plugin hook (`record-transform-plugin`)
 
 `SENZING_RECORD_TRANSFORM_PLUGIN` / `SENZING_RECORD_TRANSFORM_CONFIG` on the executors load the same C-ABI plugin as

@@ -9,8 +9,9 @@ import com.senzing.spark.work.InfoParser
  * Engine-only self-check (no Spark) bundled in the FAT jar, so a node can verify the jar
  * self-extracts and the native engine loads + resolves with NO system Senzing install:
  * {{{
- * LD_LIBRARY_PATH=<extractDir>/lib SENZING_ENGINE_CONFIGURATION_JSON=... \
+ * SENZING_ENGINE_CONFIGURATION_JSON=... \
  *   java -cp sz-spark-assembly.jar com.senzing.spark.diag.SelfCheck TEST
+ * (no `LD_LIBRARY_PATH` needed: the SDK finds libSz.so through the native-aware class loader)
  * }}}
  * Adds two matching records and asserts they resolve to the SAME entity (real ER), then searches.
  */

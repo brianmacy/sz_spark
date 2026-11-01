@@ -5,13 +5,12 @@ import java.io.File
 /**
  * Loads the Senzing native libraries in dependency order so dlopen-by-soname resolves.
  *
- * `libSz.so` directly NEEDs only system libs (RUNPATH=$ORIGIN), but it `dlopen`s `libszvec.so`,
- * `libszzstd.so`, and the DB plugin **by soname** — and `$ORIGIN`/RUNPATH does NOT apply to
- * dlopen-by-soname. So a single `System.load(libSz)` is insufficient. The fix is BOTH: (1)
- * `spark.executorEnv.LD_LIBRARY_PATH=<extract>/lib` set at executor LAUNCH (resolves
- * dlopen-by-soname; cannot be set after JVM start), and (2) `System.load` every sibling in
- * dependency order before `libSz` so each later dlopen returns an already-loaded handle (this
- * object).
+ * `libSz.so` `dlopen`s `libszvec.so`, `libszzstd.so`, and the DB plugin **by soname**, so each
+ * helper is `System.load`ed by absolute path first and every later dlopen returns the
+ * already-loaded handle. `libSz.so` itself is then loaded by the SDK's own
+ * `System.loadLibrary("Sz")`, which finds it through the native-aware class loader's `findLibrary`
+ * (no launch-time `LD_LIBRARY_PATH` needed); a launch-time `LD_LIBRARY_PATH=<extract>/lib` still
+ * works as an alternative.
  */
 object NativeLibLoader {
 
@@ -35,7 +34,16 @@ object NativeLibLoader {
     loaded
   }
 
-  /** Runtime convenience: load the standard chain from `libDir` via `System.load`. */
-  def loadFatJarLibs(libDir: File, dbPluginSoName: Option[String]): Seq[String] =
-    loadAll(libDir, loadOrder(dbPluginSoName), System.load)
+  /**
+   * Runtime: `System.load` the helpers that `libSz.so` dlopens (everything in [[loadOrder]] EXCEPT
+   * libSz.so). libSz.so itself is bound by the SDK through
+   * [[com.senzing.spark.engine.SzEnvironmentFactory.nativeAware]] — JNI ties a library to ONE class
+   * loader, so loading it here would bind it to the wrong one.
+   */
+  def loadHelpers(libDir: File, dbPluginSoName: Option[String]): Seq[String] =
+    loadAll(libDir, helperOrder(dbPluginSoName), System.load)
+
+  /** [[loadOrder]] without libSz.so. */
+  def helperOrder(dbPluginSoName: Option[String]): Seq[String] =
+    loadOrder(dbPluginSoName).filterNot(_ == NativeBootstrap.MarkerLib)
 }

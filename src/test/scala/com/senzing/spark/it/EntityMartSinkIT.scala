@@ -8,7 +8,13 @@ import org.scalatest.funsuite.AnyFunSuite
 
 import com.senzing.spark.IntegrationTest
 import com.senzing.spark.mart.EntityMartRows._
-import com.senzing.spark.mart.{EntityMartRows, EntityMartSync, GetResult, LocalDeltaSink}
+import com.senzing.spark.mart.{
+  EntityMartRows,
+  EntityMartSchema,
+  EntityMartSync,
+  GetResult,
+  LocalDeltaSink
+}
 
 /**
  * Executes the real [[LocalDeltaSink]] MERGE/DELETE SQL against a local OSS delta-spark table — the
@@ -197,6 +203,37 @@ final class EntityMartSinkIT extends AnyFunSuite with BeforeAndAfterAll {
       count("relationship", "entity_id_lo = 500 AND entity_id_hi = 501") == 1L,
       "relationship written on the first refresh"
     )
+  }
+
+  test(
+    "crash mid-refresh: a rerun completes all four tables (entity MERGE is the last write)",
+    IntegrationTest
+  ) {
+    val spk = spark
+    import spk.implicits._
+    // Own mart, created WITHOUT entity_doc: the refresh's entity_doc MERGE fails for real (no such
+    // Delta table), which is a crash part-way through `upsert`.
+    val crashBase = Files.createTempDirectory("sz-emart-crash").toString
+    EntityMartSchema.Tables
+      .filterNot(_ == "entity_doc")
+      .foreach(t => spark.sql(EntityMartSchema.createTable(t, s"delta.`$crashBase/$t`")))
+    val sink = new LocalDeltaSink(spark, crashBase)
+    val rels = Seq(rel(600, 601, "POSSIBLY_RELATED", Some("+NAME"), None))
+    val fresh = Seq(parsed(600L, "Hcrash", Seq(("DSc", "C1"))).copy(relationships = rels)).toDS()
+    val noResults = spk.emptyDataset[GetResult]
+
+    intercept[Exception](EntityMartSync.applyRefresh(spk, sink, fresh, noResults, 50))
+    // Recovery: the table exists again and the same pass (same refresh_seq, as runOnce would reuse
+    // it: the watermark was never advanced) is replayed.
+    sink.initTables()
+    EntityMartSync.applyRefresh(spk, sink, fresh, noResults, 50)
+
+    def count(table: String, where: String): Long =
+      spark.sql(s"SELECT 1 FROM delta.`$crashBase/$table` WHERE $where").count()
+    assert(count("entity", "entity_id = 600 AND entity_hash = 'Hcrash'") == 1L)
+    assert(count("entity_record", "entity_id = 600 AND record_id = 'C1'") == 1L)
+    assert(count("relationship", "entity_id_lo = 600 AND entity_id_hi = 601") == 1L)
+    assert(count("entity_doc", "entity_id = 600") == 1L, "entity_doc written by the rerun")
   }
 
   test(

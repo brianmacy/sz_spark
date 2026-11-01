@@ -64,8 +64,10 @@ abstract class AbstractDeltaSink(
   def initTables(): Unit =
     EntityMartSchema.Tables.foreach(t => spark.sql(EntityMartSchema.createTable(t, locator(t))))
 
+  // The `entity` MERGE is the LAST write: it stores the hashes the change-gate compares against, so it
+  // is the commit marker. A crash before it leaves the old hashes, and the rerun redoes every other
+  // write (all keyed, `refresh_seq`-guarded MERGEs/deletes, so replaying them is idempotent).
   def upsert(frames: MartFrames, refreshSeq: Long): Unit = {
-    mergeInto("entity", frames.entity, Seq("entity_id"), refreshSeq)
     mergeInto("entity_record", frames.entityRecord, Seq("data_source", "record_id"), refreshSeq)
     reconcileDepartedRecords(frames.entityRecord)
     // Relationship rows carry only ONE direction per refresh (this entity is the `lo` side ⇒
@@ -84,6 +86,7 @@ abstract class AbstractDeltaSink(
     )
     mergeInto("entity_doc", frames.entityDoc, Seq("entity_id"), refreshSeq)
     applyTombstones(frames.tombstones)
+    mergeInto("entity", frames.entity, Seq("entity_id"), refreshSeq)
   }
 
   /**

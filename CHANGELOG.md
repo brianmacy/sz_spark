@@ -61,8 +61,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   other three tables were never written (only `entity` was). The gate now reads the stored hashes pinned to
   the `entity` table version current when the gate is built (`DESCRIBE HISTORY` + `VERSION AS OF`), so every
   later evaluation sees the pre-upsert hashes. Pure SQL/DataFrame (no RDD, cache or temp view), so it also
-  works under Spark Connect. The gate-and-apply step is `EntityMartSync.applyRefresh`;
-  `EntityMartSinkIT` covers a first refresh through it.
+  works under Spark Connect. `upsert` also writes `entity` LAST (it holds the hashes the gate reads, so it is
+  the commit marker): a crash part-way through a refresh leaves the old hashes and the rerun redoes the other
+  tables (keyed, `refresh_seq`-guarded MERGEs, so the replay is idempotent). Before, a crash after the first
+  write (`entity`) made the rerun skip the rest. The gate-and-apply step is `EntityMartSync.applyRefresh`;
+  `EntityMartSinkIT` covers a first refresh and a crashed-then-replayed refresh through it.
 
 ## [0.4.0] - 2026-08-17
 

@@ -36,7 +36,7 @@ OSS-Delta** table (`` delta.`/path/entity` `` — the local proxy) and a **Unity
 | `entity`       | one row / resolved entity      | `entity_id`                        |
 | `entity_record`| the ENTITY MAP: one / record   | `data_source, record_id, entity_id`|
 | `relationship` | entity↔entity, `lo<hi`         | `entity_id_lo, entity_id_hi`       |
-| `entity_doc`   | `entity_id → full entity JSON` | `entity_id`                        |
+| `entity_doc`   | `entity_id → entity_json VARIANT` | `entity_id`                     |
 | `_sync_state`  | watermarks                     | —                                  |
 | `_quarantine`  | GetCore failures (dead-letter) | —                                  |
 
@@ -46,9 +46,27 @@ clustering** on the MERGE key (`entity_id` is high-cardinality; classic partitio
 writes). Every mart table carries `refresh_seq BIGINT` + `updated_at TIMESTAMP` so a delayed/replayed
 batch is a no-op (`source.refresh_seq >= target.refresh_seq`).
 
-⚠ **Phase-1 assumption to verify on the local rig** (design §10): OSS delta-spark 4.0 must support
-`CLUSTER BY`, deletion vectors, and CDF. If any is unsupported locally, the smoke test drops the
-corresponding clause (`EntityMartSchema.clusterBy` / `.tableProperties` isolate them).
+**Mart format (2026-11-01, PR #36):**
+- `entity_doc.entity_json` is **VARIANT** (`parse_json` in `EntityMartRows.framesOf`; Delta adds the
+  `variantType` table feature on create). Verified on OSS Spark 4.0.1 + delta-spark 4.0.0 together with
+  CDF, deletion vectors and `CLUSTER BY` (`EntityMartSinkIT`). Both sinks support it; no fallback.
+- **Pre-VARIANT marts:** `initTables` throws `IllegalStateException` (`entity_json is STRING`) carrying
+  `EntityMartSchema.entityDocVariantMigration(locator)`: set `delta.columnMapping.mode=name` +
+  `delta.feature.variantType=supported` (an existing table does NOT auto-enable variantType:
+  `DELTA_FEATURES_REQUIRE_MANUAL_ENABLEMENT`), ADD a VARIANT column, `UPDATE ... parse_json`, DROP the
+  STRING column, RENAME. In place, keeps every row. Path-table `CREATE OR REPLACE` with a new schema was
+  tried first and fails (`DELTA_CREATE_TABLE_SCHEME_MISMATCH`).
+- **COMMENT on every table and column** (`EntityMartSchema.Col` carries it).
+- **Unity Catalog only:** informational PK `RELY` on `entity(entity_id)`, `entity_record(data_source,
+  record_id)`, `relationship(entity_id_lo, entity_id_hi)`; FK `NOT ENFORCED NORELY` from
+  `entity_record.entity_id` and `relationship.entity_id_lo/hi` to `entity`. NORELY because entity is
+  written last and a relationship far endpoint may not be in the mart yet. `DatabricksUcSink.tableDdl`
+  vs `LocalDeltaSink.tableDdl` (no constraints: OSS Spark cannot parse them); `EntityMartSchemaSpec`
+  pins both. Added at create only (existing UC tables are not altered).
+- **No numeric `relationship.match_level`:** the V4 getEntity `RELATED_ENTITIES` schema (Senzing MCP
+  `response_schemas`) has only `MATCH_LEVEL_CODE`, and a real 4.4.3 engine response confirmed it (no
+  `MATCH_LEVEL` key; codes seen: `POSSIBLY_SAME`, `DISCLOSED`). No documented code-to-number mapping
+  exists, so none is invented.
 
 ## Status (2026-08-08)
 

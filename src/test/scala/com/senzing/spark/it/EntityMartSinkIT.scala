@@ -3,6 +3,7 @@ package com.senzing.spark.it
 import java.nio.file.Files
 
 import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.types.VariantType
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -234,6 +235,81 @@ final class EntityMartSinkIT extends AnyFunSuite with BeforeAndAfterAll {
     assert(count("entity_record", "entity_id = 600 AND record_id = 'C1'") == 1L)
     assert(count("relationship", "entity_id_lo = 600 AND entity_id_hi = 601") == 1L)
     assert(count("entity_doc", "entity_id = 600") == 1L, "entity_doc written by the rerun")
+  }
+
+  test(
+    "entity_doc stores the document as VARIANT (variantType feature) and tables carry comments",
+    IntegrationTest
+  ) {
+    val sink = new LocalDeltaSink(spark, base)
+    sink.initTables()
+    applyParsed(sink, refreshSeq = 60, parsed(700L, "Hv", Seq(("DSv", "V1"))))
+    val doc = spark.sql(s"SELECT * FROM delta.`$base/entity_doc` WHERE entity_id = 700")
+    assert(doc.schema("entity_json").dataType == VariantType)
+    val id = spark
+      .sql(
+        s"SELECT variant_get(entity_json, '$$.id', 'bigint') FROM delta.`$base/entity_doc` " +
+          "WHERE entity_id = 700"
+      )
+      .head()
+      .getLong(0)
+    assert(id == 700L, "the VARIANT is queryable by path")
+    val props = spark
+      .sql(s"SHOW TBLPROPERTIES delta.`$base/entity_doc`")
+      .collect()
+      .map(r => r.getString(0) -> r.getString(1))
+      .toMap
+    assert(props.get("delta.feature.variantType").contains("supported"))
+    assert(props.get("delta.enableChangeDataFeed").contains("true"))
+    assert(props.get("delta.enableDeletionVectors").contains("true"))
+    val detail = spark.sql(s"DESCRIBE DETAIL delta.`$base/entity_doc`").head()
+    assert(detail.getAs[String]("description").nonEmpty, "table COMMENT applied")
+    assert(
+      detail.getSeq[String](detail.fieldIndex("clusteringColumns")).toList == List("entity_id")
+    )
+    val colComment = spark
+      .sql(s"DESCRIBE TABLE delta.`$base/entity_doc`")
+      .collect()
+      .find(_.getString(0) == "entity_json")
+      .map(_.getString(2))
+    assert(colComment.exists(_.nonEmpty), "column COMMENT applied")
+  }
+
+  test(
+    "a pre-VARIANT entity_doc fails initTables with the fix; the migration preserves its rows",
+    IntegrationTest
+  ) {
+    val legacy = Files.createTempDirectory("sz-emart-legacy").toString
+    val loc = s"delta.`$legacy/entity_doc`"
+    spark.sql(
+      s"""CREATE TABLE $loc (entity_id BIGINT NOT NULL, entity_json STRING, entity_hash STRING,
+         |refresh_seq BIGINT, updated_at TIMESTAMP) USING delta CLUSTER BY (entity_id)
+         |TBLPROPERTIES (delta.enableChangeDataFeed = true, delta.enableDeletionVectors = true)""".stripMargin
+    )
+    spark.sql(s"""INSERT INTO $loc VALUES (42, '{"id":42}', 'H42', 5, current_timestamp())""")
+    val sink = new LocalDeltaSink(spark, legacy)
+
+    val err = intercept[IllegalStateException](sink.initTables())
+    assert(err.getMessage.contains("entity_json is STRING"))
+    val fix = EntityMartSchema.entityDocVariantMigration(loc)
+    assert(fix.forall(err.getMessage.contains), "the error carries the exact migration")
+    fix.foreach(spark.sql)
+
+    sink.initTables() // now passes
+    val row = spark.sql(s"SELECT * FROM $loc").collect()
+    assert(row.length == 1)
+    assert(spark.sql(s"SELECT * FROM $loc").schema("entity_json").dataType == VariantType)
+    val migrated = spark
+      .sql(
+        s"SELECT variant_get(entity_json, '$$.id', 'bigint'), entity_hash, refresh_seq FROM $loc"
+      )
+      .head()
+    assert(migrated.getLong(0) == 42L)
+    assert(migrated.getString(1) == "H42")
+    assert(migrated.getLong(2) == 5L)
+    // The migrated table takes the next refresh normally.
+    applyParsed(sink, refreshSeq = 6, parsed(43L, "H43", Seq(("DSl", "L1"))))
+    assert(spark.sql(s"SELECT 1 FROM $loc").count() == 2L)
   }
 
   test(

@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Entity mart format: VARIANT document, comments, Unity Catalog constraints.** `entity_doc.entity_json` is now
+  `VARIANT` (`parse_json`; Delta `variantType` feature), so fields are read by path without re-parsing. Every mart
+  table and column has a `COMMENT`. On `sink=uc` the tables get informational keys: PRIMARY KEY `RELY` on
+  `entity(entity_id)`, `entity_record(data_source, record_id)`, `relationship(entity_id_lo, entity_id_hi)`, and
+  FOREIGN KEY `NOT ENFORCED NORELY` from `entity_record.entity_id` and `relationship.entity_id_lo`/`_hi` to
+  `entity`; the path-based local sink creates none. A mart created before this stops at `initTables` with
+  `entity_json is STRING` and the in-place migration to run (`EntityMartSchema.entityDocVariantMigration`, keeps
+  every row). CDF, deletion vectors, liquid clustering, the `refresh_seq` guard and the entity-last write order
+  are unchanged. No numeric `relationship.match_level` was added: the V4 `getEntity` response has only
+  `MATCH_LEVEL_CODE`. `EntityMartSchemaSpec` + 2 new `EntityMartSinkIT` cases.
 - **Native loading without `LD_LIBRARY_PATH`.** The SDK's own `System.loadLibrary("Sz")` (in its `Native*Jni`
   classes) only searched `java.library.path`, so a launch-time `LD_LIBRARY_PATH=<extract>/lib` was mandatory.
   The engine now defines the SDK implementation (`com.senzing.sdk.core`) and `SzCoreEnvironmentFactory` (the

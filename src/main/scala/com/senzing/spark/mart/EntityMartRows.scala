@@ -225,7 +225,11 @@ object EntityMartRows {
       entity = parsed.map(_.entity).toDF(),
       entityRecord = parsed.flatMap(_.records).toDF(),
       relationship = parsed.flatMap(_.relationships).toDF(),
-      entityDoc = parsed.map(_.doc).toDF(),
+      // The document is stored as VARIANT (see EntityMartSchema); parse it once here.
+      entityDoc = parsed
+        .map(_.doc)
+        .toDF()
+        .selectExpr("entity_id", "parse_json(entity_json) AS entity_json", "entity_hash"),
       tombstones = results.flatMap(r => tombstoneOf(r).toSeq).toDF()
     )
   }

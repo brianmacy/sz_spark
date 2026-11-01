@@ -24,9 +24,31 @@ It replicates **all three shapes** Guide 06 listed, at once — as four Delta ta
 | `entity` | one row / resolved entity (name, counts, representative features, hash) | "what is entity 42?" |
 | `entity_record` | the **entity map** — one row / source record | "which entity is my record in?" |
 | `relationship` | entity↔entity, normalized `lo < hi` | the resolved graph — networks, disambiguation |
-| `entity_doc` | `entity_id → full entity JSON` | point-lookup serving (APIs, apps) |
+| `entity_doc` | `entity_id → full entity JSON` (`entity_json VARIANT`) | point-lookup serving (APIs, apps); query fields by path, e.g. `variant_get(entity_json, '$.RESOLVED_ENTITY.ENTITY_NAME', 'string')` |
 
 Plus two bookkeeping tables: `_sync_state` (the refresh watermark) and `_quarantine` (fetch failures).
+
+Every table and column has a `COMMENT`. All four mart tables use Change Data Feed, deletion vectors and
+liquid clustering on their key. On **Unity Catalog** (`sink=uc`) the tables also get informational
+constraints (Databricks does not enforce them):
+
+| Table | Primary key (`RELY`) | Foreign keys → `entity(entity_id)` (`NOT ENFORCED NORELY`) |
+|---|---|---|
+| `entity` | `entity_id` | — |
+| `entity_record` | `data_source, record_id` | `entity_id` |
+| `relationship` | `entity_id_lo, entity_id_hi` | `entity_id_lo`, `entity_id_hi` |
+
+The primary keys hold (every write is a MERGE on them), so they are `RELY` and the optimizer may use
+them. The foreign keys are `NORELY`: a child row can briefly name an entity the mart has not written
+yet. The path-based local sink creates no constraints (open-source Spark does not support them).
+Constraints are added when a table is created; a UC mart created earlier keeps working without them
+(add them with `ALTER TABLE ... ADD CONSTRAINT` using the same clauses if you want them).
+
+**Upgrading a mart created before `entity_json` was VARIANT:** `initTables` stops with
+`entity_json is STRING` and prints the in-place migration for your table (`EntityMartSchema.entityDocVariantMigration`):
+enable column mapping and the `variantType` feature, add a VARIANT column, fill it with `parse_json`, drop
+the old column, rename the new one. Every row is kept. Stop the sync job first and drain any pending CDF
+(Delta can refuse to read CDF across the drop and rename).
 
 ## The one rule: refresh, don't apply deltas
 

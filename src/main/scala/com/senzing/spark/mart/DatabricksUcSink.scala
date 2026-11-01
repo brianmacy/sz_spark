@@ -27,9 +27,23 @@ final class DatabricksUcSink(
 ) extends AbstractDeltaSink(spark, verifyDeparted) {
 
   protected def locator(table: String): String = DatabricksUcSink.ucLocator(catalog, schema, table)
+
+  override protected def ddl(table: String): String =
+    DatabricksUcSink.tableDdl(catalog, schema, table)
 }
 
 object DatabricksUcSink {
+
+  /**
+   * The `CREATE TABLE` DDL for a mart table under `catalog.schema`, WITH the informational PRIMARY
+   * KEY / FOREIGN KEY constraints Unity Catalog supports.
+   */
+  def tableDdl(catalog: String, schema: String, table: String): String =
+    EntityMartSchema.createTable(
+      table,
+      ucLocator(catalog, schema, table),
+      EntityMartSchema.ucConstraints(table, ucLocator(catalog, schema, _))
+    )
 
   /**
    * A Unity Catalog three-part table name `` catalog.schema.`table` ``. The table part is

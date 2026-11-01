@@ -4,6 +4,7 @@ import java.util.UUID
 
 import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
 import org.apache.spark.sql.functions.{col, current_timestamp, lit}
+import org.apache.spark.sql.types.StringType
 
 import com.senzing.spark.mart.EntityMartRows.{MartFrames, ParsedEntity}
 
@@ -61,8 +62,30 @@ abstract class AbstractDeltaSink(
   /** The SQL locator for a mart table (path identifier or UC name). */
   protected def locator(table: String): String
 
-  def initTables(): Unit =
-    EntityMartSchema.Tables.foreach(t => spark.sql(EntityMartSchema.createTable(t, locator(t))))
+  /** The `CREATE TABLE` DDL for `table`; the UC sink adds its informational constraints. */
+  protected def ddl(table: String): String = EntityMartSchema.createTable(table, locator(table))
+
+  def initTables(): Unit = {
+    EntityMartSchema.Tables.foreach(t => spark.sql(ddl(t)))
+    requireVariantEntityDoc()
+  }
+
+  /**
+   * `CREATE TABLE IF NOT EXISTS` leaves a mart created before `entity_json` became VARIANT as it
+   * was, and writing VARIANT into its STRING column would fail mid-refresh. Fail here instead, with
+   * the migration to run ([[EntityMartSchema.entityDocVariantMigration]]).
+   */
+  private def requireVariantEntityDoc(): Unit = {
+    val loc = locator("entity_doc")
+    val jsonType = spark.sql(s"SELECT * FROM $loc LIMIT 0").schema("entity_json").dataType
+    if (jsonType == StringType) {
+      val fix = EntityMartSchema.entityDocVariantMigration(loc).mkString(";\n\n")
+      throw new IllegalStateException(
+        s"$loc was created before entity_json became VARIANT: entity_json is STRING. Stop the " +
+          s"sync job and run this migration (it keeps every row), then restart:\n\n$fix;"
+      )
+    }
+  }
 
   // The `entity` MERGE is the LAST write: it stores the hashes the change-gate compares against, so it
   // is the commit marker. A crash before it leaves the old hashes, and the rerun redoes every other
@@ -285,6 +308,18 @@ final class LocalDeltaSink(
     basePath: String,
     verifyDeparted: DataFrame => DataFrame = identity
 ) extends AbstractDeltaSink(spark, verifyDeparted) {
-  private val base = basePath.stripSuffix("/")
-  protected def locator(table: String): String = s"delta.`$base/$table`"
+  protected def locator(table: String): String = LocalDeltaSink.locator(basePath, table)
+}
+
+object LocalDeltaSink {
+
+  /**
+   * The `CREATE TABLE` DDL for a mart table under `basePath` (no constraints: OSS Spark has none).
+   */
+  def tableDdl(basePath: String, table: String): String =
+    EntityMartSchema.createTable(table, locator(basePath, table))
+
+  /** The path identifier `` delta.`<basePath>/<table>` ``. */
+  def locator(basePath: String, table: String): String =
+    s"delta.`${basePath.stripSuffix("/")}/$table`"
 }

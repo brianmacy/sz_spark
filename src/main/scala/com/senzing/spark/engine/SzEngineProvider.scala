@@ -60,8 +60,7 @@ object SzEngineProvider {
         (EngineSettings.rewritePaths(base, paths), SzEnvironmentFactory.nativeAware(paths.libDir))
       } else (base, SzEnvironmentFactory.direct())
 
-    SzEnvGuard.markBuilt()
-    factory.build(InstanceName, settings)
+    SzEnvGuard.guardedBuild(factory.build(InstanceName, settings))
   }
 
   private def cleanupExtract(): Unit =

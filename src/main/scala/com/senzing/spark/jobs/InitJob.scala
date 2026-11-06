@@ -52,10 +52,11 @@ object InitJob {
 
     // (2) Default config registration — exactly ONE environment, guarded.
     // NOTE: wrap in a DB advisory lock (pg_advisory_lock / lock row) in production to close TOCTOU.
-    SzEnvGuard.markBuilt()
-    val env = SzEnvironmentFactory
-      .direct()
-      .build("sz-init", EngineSettings.fromEnv(System.getenv().asScala.toMap))
+    val env = SzEnvGuard.guardedBuild(
+      SzEnvironmentFactory
+        .direct()
+        .build("sz-init", EngineSettings.fromEnv(System.getenv().asScala.toMap))
+    )
     try {
       val cm = env.getConfigManager
       ensureDefaultConfig(

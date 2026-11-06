@@ -81,6 +81,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `RedoJob.runBatch`, which `main` loops on; the test calls it until the queue is empty and checks the
   queue drained, output rows are `op=REDO` and no redo failed (an empty queue writes nothing). No new
   job flag. `scripts/it-local.sh` no longer has to run `EngineIT` last.
+- **A failed engine build no longer hides its error behind "already active".** `SzEngineProvider` and
+  `InitJob` reserved the one-per-JVM `SzEnvGuard` slot before building the environment, and a build that
+  threw (bad settings, missing library) left the slot held. The next task's `acquire()` retried the build and
+  failed with "An SzEnvironment is already active in this JVM" instead of the real cause. Both now build
+  through `SzEnvGuard.guardedBuild`, which releases the slot if the build throws. `SzEnvGuardSpec` +2 cases.
 
 ## [0.4.0] - 2026-08-17
 

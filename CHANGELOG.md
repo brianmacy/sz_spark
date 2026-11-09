@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-09
+
 ### Changed
 - **Databricks docs: validated scope.** `docs/DATABRICKS.md`, `docs/tutorials/databricks.md` and the README
   now state what ran on a live Databricks workspace: DBR 17.3 LTS classic job clusters (Graviton), Lakebase

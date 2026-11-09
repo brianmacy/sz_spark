@@ -10,11 +10,11 @@ and `docs/TROUBLESHOOTING.md` for failure modes.
 > | | Validated |
 > |---|---|
 > | Runtime | AWS classic Databricks, DBR 17.3 LTS (Spark 4.0, Scala 2.13, JDK 17), Graviton arm64 |
-> | Compute | Classic **job clusters**, 2 x `r6g.2xlarge` workers on demand, 48 engine threads per worker |
-> | Repository | Lakebase PostgreSQL (8 CU), TLS `verify-full` |
+> | Compute | Classic **job clusters**, memory-optimized Graviton workers on demand |
+> | Repository | Lakebase PostgreSQL, TLS `verify-full` |
 > | sz_spark parts | `InitJob` (schema + default config), `OverlappingBatchEngine` (add/delete and redo), the per-JVM engine provider |
-> | Scale | 1,000,000 records added, 0 quarantined, ~44 min (~380 records/s) |
-> | Memory | Peak engine RSS 10.7 GB per executor JVM (48 threads), inside the 4 GB + 1 GB per thread rule below |
+> | Scale | 1,000,000 records added, 0 quarantined |
+> | Memory | Engine memory inside the 4 GB + 1 GB per thread rule below |
 >
 > **Not validated on Databricks:** sz_spark's own job mains as tasks (`AddUpdateJob`, `DeleteJob`,
 > `RedoJob`, `SearchJob`), `EntityMartSync sink=uc`, init scripts, DBFS, autoscaling, serverless,

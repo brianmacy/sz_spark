@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+- **Databricks docs: validated scope.** `docs/DATABRICKS.md`, `docs/tutorials/databricks.md` and the README
+  now state what ran on a live Databricks workspace: DBR 17.3 LTS classic job clusters (Graviton), Lakebase
+  PostgreSQL, `InitJob` and `OverlappingBatchEngine` at 1M records, and what did not (the job mains as
+  tasks, `EntityMartSync sink=uc`, init scripts, serverless).
+
 ## [0.5.0] - 2026-11-06
 
 ### Added

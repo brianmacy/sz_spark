@@ -1,9 +1,9 @@
 # Tutorial: sz_spark on Databricks
 
-> ⚠️ **Not yet exercised on a live Databricks workspace.** The same sz_spark application is validated
-> on-prem at 100M+ record scale (see `docs/tutorials/spark-onprem.md`), but the Databricks-specific
-> steps here — DBR/Spark version, GLIBC, init-script packages, Unity Catalog — are **unverified**.
-> Verify each step before relying on it. Cross-check Senzing specifics against the **Senzing-MCP** and
+> ✅ **The sz_spark engine core is validated on a live Databricks workspace** (DBR 17.3 LTS, classic
+> job clusters, Lakebase, 1M records): see the validation note in `docs/DATABRICKS.md` for exactly what
+> ran. The steps in this tutorial that it did not cover — sz_spark's own job mains as tasks, init-script
+> packages, `EntityMartSync` on Unity Catalog — are **unverified**; verify each before relying on it. Cross-check Senzing specifics against the **Senzing-MCP** and
 > your installed dist. This is the step-by-step walkthrough; `docs/DATABRICKS.md` is the condensed
 > reference.
 

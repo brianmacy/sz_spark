@@ -3,14 +3,30 @@
 A deploy guide; see `docs/RUNBOOK.md` for the binding preconditions, `docs/PERFORMANCE.md` for sizing,
 and `docs/TROUBLESHOOTING.md` for failure modes.
 
-> ⚠️ **Not yet validated on a live Databricks cluster** (NEXT_STEPS #9). The same sz_spark application
-> is validated on-prem at 100M+ record scale (see `docs/tutorials/spark-onprem.md`), and the entity-mart
-> replication code (Phase 1+2) is merged; what remains unverified is the **live-Databricks / Unity
-> Catalog** validation (Phase 3). The required-conf and preconditions are derived from the verified
-> design and the SDK's native-loading facts; the concrete cluster steps below (init scripts, cluster
-> libraries, Volumes paths) are **intended configuration** to walk through and confirm on a real DBR 14+
-> cluster, then mark validated. Treat them as a starting checklist, not a tested recipe.
-
+> ✅ **Validated on a live Databricks workspace** (2026-11-07) through
+> [Senzing/sz-databricks](https://github.com/Senzing/sz-databricks), which builds sz_spark from a pinned
+> commit (`a3ebc27`, the code of v0.5.0) and drives it from its own job mains:
+>
+> | | Validated |
+> |---|---|
+> | Runtime | AWS classic Databricks, DBR 17.3 LTS (Spark 4.0, Scala 2.13, JDK 17), Graviton arm64 |
+> | Compute | Classic **job clusters**, 2 x `r6g.2xlarge` workers on demand, 48 engine threads per worker |
+> | Repository | Lakebase PostgreSQL (8 CU), TLS `verify-full` |
+> | sz_spark parts | `InitJob` (schema + default config), `OverlappingBatchEngine` (add/delete and redo), the per-JVM engine provider |
+> | Scale | 1,000,000 records added, 0 quarantined, ~44 min (~380 records/s) |
+> | Memory | Peak engine RSS 10.7 GB per executor JVM (48 threads), inside the 4 GB + 1 GB per thread rule below |
+>
+> **Not validated on Databricks:** sz_spark's own job mains as tasks (`AddUpdateJob`, `DeleteJob`,
+> `RedoJob`, `SearchJob`), `EntityMartSync sink=uc`, init scripts, DBFS, autoscaling, serverless,
+> x86 nodes, Azure and GCP. The steps below for those are a checklist to confirm, not a tested recipe.
+>
+> What the live runs showed:
+> - **Serverless cannot run the engine**: serverless caps user code at 1 GB of memory, and the engine
+>   needs several GB.
+> - **Executors could not read the native payload from a Unity Catalog Volume path**; loading it from a
+>   cluster-library JAR, unpacked once per JVM, works.
+> - Graviton types without local disks (`m6g.*`, `r6g.*`) need an EBS volume on the cluster.
+> - Use on-demand workers for long loads: spot reclaims interrupt in-flight engine work.
 ## Cluster requirements
 
 - **Runtime**: a DBR whose Spark is **4.0** / Scala **2.13** and JDK 17/21; pin the build's

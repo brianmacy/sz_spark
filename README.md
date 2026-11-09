@@ -275,8 +275,9 @@ Reference docs:
 - Troubleshooting (Spark-specific failure modes): [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)
 - Ops runbook: [`docs/RUNBOOK.md`](docs/RUNBOOK.md)
 - Deployment tutorials: [on-prem Spark](docs/tutorials/spark-onprem.md) (✅ **validated on-prem at
-  100M+ records**) · [AWS EMR](docs/tutorials/aws-emr.md) · [Databricks](docs/tutorials/databricks.md)
-  (⚠️ EMR/Databricks **not yet tested directly**; the same application is validated on-prem)
+  100M+ records**) · [AWS EMR](docs/tutorials/aws-emr.md) (⚠️ **not yet tested directly**) ·
+  [Databricks](docs/tutorials/databricks.md) (✅ **engine core validated at 1M records** on DBR 17.3 LTS
+  with Lakebase; see `docs/DATABRICKS.md` for what ran)
 - Databricks reference: [`docs/DATABRICKS.md`](docs/DATABRICKS.md)
 - Design (implementation): [`docs/DESIGN.md`](docs/DESIGN.md)
 
